@@ -205,7 +205,15 @@ class GeminiMAS:
                 except Exception as e: history += f"\n\nTool parse error: {str(e)}."
             else: return output
 
-        return self.client_pro.generate(history + f"\n\n[Role: {role}] Summarize the final outcome.", system_instruction=sys_instr)
+        status(f"\n[!] {role} Stuck. Consulting Senior Debugger...")
+        advice = self.client_pro.generate(f"Worker Role: {role} is stuck.\nDEBUG CONTEXT:\n{history}\n\nProvide an actionable fix or workaround.", system_instruction="You are a Senior Debugger. Help the worker get unstuck.")
+
+        if advice:
+            status(" Advice received. Executing final attempt...")
+            final_history = history + f"\n\nSENIOR_DEBUGGER_ADVICE: {advice}\nExecute the task one last time using this advice."
+            return self.client_lite.generate(final_history, system_instruction=sys_prompt)
+
+        return f"Task failed after 5 attempts and Senior Debugger consultation."
 
     def solve_task(self, user_goal):
         past = self.db.semantic_search(user_goal)
