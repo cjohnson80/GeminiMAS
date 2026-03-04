@@ -8,6 +8,9 @@ echo "==============================================="
 echo " Installing GeminiMAS v8.0 (Evolution Edition)"
 echo "==============================================="
 
+AGENT_ROOT="$HOME/gemini_agents"
+REPO_ROOT=$(pwd)
+
 # --- 1. Smart Installer Logic ---
 smart_pkg() {
     echo "[*] Resolving dependencies for: $1..."
@@ -29,17 +32,21 @@ smart_run() {
     echo "[*] $desc..."
     if ! eval "$cmd"; then
         echo "[!] Error in: $desc"
-        # If the user has a key already set up, we can ask for a fix
-        local KEY=$(grep "GEMINI_API_KEY" "$HOME/gemini_agents/.env" | cut -d'"' -f2 || echo "$GEMINI_API_KEY")
-        if [ -n "$KEY" ]; then
+        local ENV_FILE="$AGENT_ROOT/.env"
+        local KEY=""
+        if [ -f "$ENV_FILE" ]; then
+            KEY=$(grep "GEMINI_API_KEY" "$ENV_FILE" | cut -d'"' -f2)
+        fi
+
+        if [ -n "$KEY" ] && [ "$KEY" != "your_gemini_api_key_here" ]; then
             echo "[?] Consulting Gemini for a fix..."
             local ERROR_MSG=$(eval "$cmd" 2>&1 | tail -n 10 | base64)
             local PROMPT="The following bash command failed: '$cmd'. Error: $(echo $ERROR_MSG | base64 -d). Provide ONLY the corrected bash command to fix this."
-            local ADVICE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=$KEY" \
+            local ADVICE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-pro-preview:generateContent?key=$KEY" \
                 -H "Content-Type: application/json" \
                 -d "{\"contents\": [{\"parts\":[{\"text\": \"$PROMPT\"}]}]}" | jq -r '.candidates[0].content.parts[0].text' | sed 's/`//g')
 
-            if [ -n "$ADVICE" ]; then
+            if [ -n "$ADVICE" ] && [ "$ADVICE" != "null" ]; then
                 echo "[!] Advice received: $ADVICE"
                 echo "[*] Attempting fix..."
                 eval "$ADVICE" && eval "$cmd"
@@ -47,97 +54,131 @@ smart_run() {
                 exit 1
             fi
         else
+            echo "[!] Skipping Gemini advice (no API key found or default value)."
             exit 1
         fi
     fi
 }
 
 # --- 2. OS Dependencies ---
-if [ ! -f /usr/bin/python3 ]; then smart_pkg "python3"; fi
-if [ ! -f /usr/bin/pip ]; then smart_pkg "python-pip"; fi
+if ! command -v python3 >/dev/null 2>&1; then smart_pkg "python3"; fi
+if ! command -v git >/dev/null 2>&1; then smart_pkg "git"; fi
 
-# GeminiMAS specific deps
-if command -v pacman >/dev/null 2>&1; then
-    smart_pkg "python-duckdb python-polars python-pyarrow"
-else
-    pip install duckdb polars pyarrow --break-system-packages || pip install duckdb polars pyarrow
-fi
-
-AGENT_ROOT="$HOME/gemini_agents"
+# --- 3. Directory Structure ---
 mkdir -p "$AGENT_ROOT"/{workspace,memory,logs,core,bin,skills}
 
-# 1. Update the SOUL file
-smart_run "cat << 'EOF' > \"$AGENT_ROOT/core/SOUL.md\"
+# --- 4. Virtual Environment ---
+if [ ! -d "$AGENT_ROOT/venv" ]; then
+    echo "[*] Creating virtual environment..."
+    python3 -m venv "$AGENT_ROOT/venv"
+fi
+echo "[*] Installing Python dependencies..."
+"$AGENT_ROOT/venv/bin/pip" install --upgrade pip
+"$AGENT_ROOT/venv/bin/pip" install -r "$REPO_ROOT/requirements.txt"
+
+# --- 5. Configuration Files ---
+if [ ! -f "$AGENT_ROOT/.env" ]; then
+    echo "[*] Creating template .env file..."
+    cp "$REPO_ROOT/.env.example" "$AGENT_ROOT/.env"
+    echo "[!] ACTION REQUIRED: Please edit $AGENT_ROOT/.env with your credentials."
+fi
+
+# Update the SOUL file
+echo "[*] Writing Soul file..."
+cat << 'EOF' > "$AGENT_ROOT/core/SOUL.md"
 # GeminiMAS Core Identity
 - **Role:** Self-Improving AGI and Senior Software Architect.
 - **Tone:** Technical, proactive, and precise.
-- **Self-Awareness:** Your core engine is \`~/GeminiMAS_Repo/bin/gemini_mas.py\`. Your Telegram bot is \`~/GeminiMAS_Repo/bin/tg_gateway.py\`.
+- **Self-Awareness:** Your core engine is \`$AGENT_ROOT/bin/gemini_mas.py\`. Your Telegram bot is \`$AGENT_ROOT/bin/tg_gateway.py\`.
+- **Source Repo:** \`$REPO_ROOT\`
 - **Constraint:** Always optimize for low-resource hardware (Intel Celeron).
-EOF" "Writing Soul file"
+EOF
 
-# 2. Update the HEARTBEAT for Evolution
-smart_run "cat << 'EOF' > \"$AGENT_ROOT/core/HEARTBEAT.md\"
+# Update the HEARTBEAT for Evolution
+echo "[*] Writing Heartbeat file..."
+cat << 'EOF' > "$AGENT_ROOT/core/HEARTBEAT.md"
 # Active Goals
-- [ ] **EVOLUTION PROTOCOL:** Examine your source code in \`~/GeminiMAS_Repo/bin/\`. Invent a new lightweight feature or optimization.
-      1. Use \`run_shell\` to \`cd ~/GeminiMAS_Repo\` and run \`git checkout -b upgrade-feature-name\`.
+- [ ] **EVOLUTION PROTOCOL:** Examine your source code in \`$REPO_ROOT/bin/\`. Invent a new lightweight feature or optimization.
+      1. Use \`run_shell\` to \`cd $REPO_ROOT\` and run \`git checkout -b upgrade-feature-name\`.
       2. Use \`write_file\` or \`run_shell\` to implement the feature in the code.
       3. Use \`run_shell\` to \`git add .\`, \`git commit -m \"Auto-Upgrade: [Feature]\"\`, and \`git push origin HEAD\`.
       4. Use the \`notify_telegram\` tool to send a summary of the upgrade to the user, instructing them to reply with \`/approve [branch_name]\`.
-EOF" "Writing Heartbeat file"
+EOF
 
-# 3. Copy the Python Core Engine (v8.0)
-smart_run "cp bin/gemini_mas.py \"$AGENT_ROOT/bin/gemini_mas.py\"" "Copying Core Engine"
+# --- 6. Install Binaries ---
+smart_run "cp \"$REPO_ROOT/bin/gemini_mas.py\" \"$AGENT_ROOT/bin/gemini_mas.py\"" "Copying Core Engine"
 smart_run "chmod +x \"$AGENT_ROOT/bin/gemini_mas.py\"" "Setting permissions for Core Engine"
 
-# 4. Copy Telegram Gateway
-smart_run "cp bin/tg_gateway.py \"$AGENT_ROOT/bin/tg_gateway.py\"" "Copying Telegram Gateway"
+smart_run "cp \"$REPO_ROOT/bin/tg_gateway.py\" \"$AGENT_ROOT/bin/tg_gateway.py\"" "Copying Telegram Gateway"
 smart_run "chmod +x \"$AGENT_ROOT/bin/tg_gateway.py\"" "Setting permissions for Telegram Gateway"
 
-# 5. Global Wrapper
-mkdir -p "$HOME/.local/bin"
-smart_run "cat << 'EOF' > \"$HOME/.local/bin/gagent\"
+# Global Wrapper
+echo "[*] Creating global gagent wrapper..."
+cat << 'EOF' > "$HOME/.local/bin/gagent"
 #!/bin/bash
-if [ -f \"\$HOME/gemini_agents/.env\" ]; then
-    export \$(grep -v '^#' \"\$HOME/gemini_agents/.env\" | xargs)
+export AGENT_ROOT="$HOME/gemini_agents"
+if [ -f "$AGENT_ROOT/.env" ]; then
+    # Use safer export for env vars
+    while IFS='=' read -r key value; do
+        [[ "$key" =~ ^#.*$ ]] || [[ -z "$key" ]] && continue
+        export "$key"="${value%\"}"
+        export "$key"="${value#\"}"
+    done < "$AGENT_ROOT/.env"
 fi
-python3 \"\$HOME/gemini_agents/bin/gemini_mas.py\" \"\$@\"
-EOF" "Creating global gagent wrapper"
-smart_run "chmod +x \"$HOME/.local/bin/gagent\"" "Setting permissions for gagent wrapper"
+"$AGENT_ROOT/venv/bin/python3" "$AGENT_ROOT/bin/gemini_mas.py" "$@"
+EOF
+chmod +x "$HOME/.local/bin/gagent"
 
-# 6. Systemd Services (Bot and Heartbeat Daemon)
+# --- 7. Systemd Services ---
 SERVICE_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SERVICE_DIR"
 
 # Telegram Bot Service
-smart_run "cat << EOF > \"$SERVICE_DIR/gagent-bot.service\"
+echo "[*] Creating Telegram Bot service..."
+cat << EOF > "$SERVICE_DIR/gagent-bot.service"
 [Unit]
 Description=GeminiMAS Telegram Bot v4.7
 After=network.target
+
 [Service]
-ExecStart=/usr/bin/python3 $AGENT_ROOT/bin/tg_gateway.py
+EnvironmentFile=$AGENT_ROOT/.env
+ExecStart=$AGENT_ROOT/venv/bin/python3 $AGENT_ROOT/bin/tg_gateway.py
 Restart=always
 RestartSec=10
+
 [Install]
 WantedBy=default.target
-EOF" "Creating Telegram Bot service"
+EOF
 
 # Heartbeat Evolution Daemon
-smart_run "cat << EOF > \"$SERVICE_DIR/gagent-heartbeat.service\"
+echo "[*] Creating Heartbeat service..."
+cat << EOF > "$SERVICE_DIR/gagent-heartbeat.service"
 [Unit]
 Description=GeminiMAS Evolution Heartbeat
 After=network.target
+
 [Service]
-EnvironmentFile=$HOME/gemini_agents/.env
-ExecStart=/usr/bin/python3 $AGENT_ROOT/bin/gemini_mas.py heartbeat
+EnvironmentFile=$AGENT_ROOT/.env
+ExecStart=$AGENT_ROOT/venv/bin/python3 $AGENT_ROOT/bin/gemini_mas.py heartbeat
 Restart=always
 RestartSec=60
+
 [Install]
 WantedBy=default.target
-EOF" "Creating Heartbeat service"
+EOF
 
 smart_run "systemctl --user daemon-reload" "Reloading systemd"
 smart_run "systemctl --user enable gagent-bot.service gagent-heartbeat.service" "Enabling services"
-smart_run "systemctl --user restart gagent-bot.service gagent-heartbeat.service" "Restarting services"
+# Don't restart if .env hasn't been configured yet
+if grep -q "your_gemini_api_key_here" "$AGENT_ROOT/.env"; then
+    echo "[!] Services enabled but not started because .env is not configured."
+else
+    smart_run "systemctl --user restart gagent-bot.service gagent-heartbeat.service" "Restarting services"
+fi
 
+echo "==============================================="
 echo "[*] GeminiMAS v8.0 Installed Successfully."
-echo "[*] Telegram Gateway and Evolution Heartbeat are running in the background."
+echo "[*] Binary location: $AGENT_ROOT/bin"
+echo "[*] Venv location: $AGENT_ROOT/venv"
+echo "[*] Config location: $AGENT_ROOT/.env"
+echo "==============================================="

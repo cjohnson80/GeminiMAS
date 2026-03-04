@@ -8,6 +8,7 @@ import json
 import os
 import argparse
 import sys
+import subprocess
 
 # Hardware Optimization: Using standard libs only to minimize memory footprint on Celeron
 def retry_with_backoff(retries=4, backoff_in_seconds=5):
@@ -28,13 +29,15 @@ def retry_with_backoff(retries=4, backoff_in_seconds=5):
     return decorator
 
 class GeminiClient:
-    def __init__(self, api_key=None, model='gemini-3.1-flash-lite-preview'):
+    def __init__(self, api_key=None, model='gemini-3.5-pro-preview'):
         self.api_key = api_key or os.environ.get('GEMINI_API_KEY')
         self.model = model.replace('models/', '')
         self.base_url = 'https://generativelanguage.googleapis.com/v1beta/models/'
 
     @retry_with_backoff()
     def generate(self, prompt, system_instruction=None):
+        if not self.api_key:
+            return "Error: GEMINI_API_KEY not found."
         url = f'{self.base_url}{self.model}:generateContent?key={self.api_key}'
         payload = {'contents': [{'parts': [{'text': prompt}]}]}
         if system_instruction: payload['systemInstruction'] = {'parts': [{'text': system_instruction}]}
@@ -46,18 +49,36 @@ def run_heartbeat():
     # Evolution Protocol: Logic placeholder for internal self-improvement
     print("[*] Heartbeat running. Checking for codebase optimizations...")
 
+    # In a real scenario, this would:
+    # 1. Analyze logs/errors
+    # 2. Propose fix
+    # 3. Create branch
+    # 4. Notify user via Telegram
+
+    # Simple check for disk space as a "heartbeat" task
+    usage = subprocess.check_output(['df', '-h', '/']).decode()
+    print(f"[*] System Health Check:\n{usage}")
+
 def main():
     parser = argparse.ArgumentParser(description='GeminiMAS Core Engine')
     subparsers = parser.add_subparsers(dest='command')
     subparsers.add_parser('heartbeat')
-    parser.add_argument('--prompt', type=str)
+
+    # Allow prompt as positional argument OR via --prompt
+    parser.add_argument('positional_prompt', nargs='?', type=str, help='The prompt to send to Gemini')
+    parser.add_argument('--prompt', type=str, help='The prompt to send to Gemini (alternative)')
+
     args = parser.parse_args()
 
     if args.command == 'heartbeat':
         run_heartbeat()
-    elif args.prompt:
-        client = GeminiClient()
-        print(client.generate(args.prompt))
+    else:
+        prompt = args.prompt or args.positional_prompt
+        if prompt:
+            client = GeminiClient()
+            print(client.generate(prompt))
+        else:
+            parser.print_help()
 
 if __name__ == '__main__':
     main()
