@@ -198,21 +198,52 @@ class Persistence:
         self.skills_dir = SKILLS_DIR
         os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
         os.makedirs(self.skills_dir, exist_ok=True)
-        with db_lock:
-            self.con = duckdb.connect(DB_FILE)
-            self.con.execute("CREATE TABLE IF NOT EXISTS memory (timestamp TIMESTAMP, goal TEXT, summary TEXT, embedding FLOAT[768])")
+        self._init_db()
+
+    def _init_db(self):
+        # Retry loop for initial connection
+        for _ in range(5):
+            try:
+                with db_lock:
+                    self.con = duckdb.connect(DB_FILE)
+                    # Enable Write-Ahead Logging for better concurrency
+                    self.con.execute("PRAGMA journal_mode=WAL")
+                    self.con.execute("CREATE TABLE IF NOT EXISTS memory (timestamp TIMESTAMP, goal TEXT, summary TEXT, embedding FLOAT[768])")
+                return
+            except Exception as e:
+                if "locking" in str(e).lower():
+                    time.sleep(1)
+                    continue
+                raise e
 
     def save_memory(self, goal, summary):
         if vec := self.client.embed(goal + " " + summary):
-            with db_lock: self.con.execute("INSERT INTO memory VALUES (now(), ?, ?, ?)", [goal, summary, vec])
+            for _ in range(10): # Robust retry for writes
+                try:
+                    with db_lock:
+                        self.con.execute("INSERT INTO memory VALUES (now(), ?, ?, ?)", [goal, summary, vec])
+                    return
+                except Exception as e:
+                    if "locking" in str(e).lower():
+                        time.sleep(0.5)
+                        continue
+                    break
 
     def semantic_search(self, query, limit=3):
         results = []
         if vec := self.client.embed(query):
-            with db_lock:
-                results = self.con.execute("SELECT goal, summary FROM memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[768]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
+            for _ in range(5):
+                try:
+                    with db_lock:
+                        results = self.con.execute("SELECT goal, summary FROM memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[768]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
+                    break
+                except Exception as e:
+                    if "locking" in str(e).lower():
+                        time.sleep(0.2)
+                        continue
+                    break
 
-        # Skill Injection: Search the skills directory for relevant MD files
+        # Skill Injection
         skills_found = []
         if os.path.exists(SKILLS_DIR):
             for f in os.listdir(SKILLS_DIR):
@@ -220,7 +251,6 @@ class Persistence:
                     skills_found.append({"goal": f"Skill: {f}", "summary": read_file_safe(os.path.join(SKILLS_DIR, f))[:2000]})
 
         return results + skills_found
-
 class GeminiMAS:
     def __init__(self, api_key):
         self.api_key = api_key
