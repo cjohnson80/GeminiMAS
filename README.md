@@ -34,3 +34,4 @@ GeminiMAS is a high-density, multi-agentic system designed to run on low-resourc
 - **Memory:** All interactions are semantically indexed in `~/gemini_agents/memory/memory.db`.
 dummy update
 Testing automation
+test
