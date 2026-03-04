@@ -42,53 +42,51 @@ class GeminiMAS:
         self.history = []
         if os.path.exists(CHAT_LOG):
             with open(CHAT_LOG, 'r') as f:
-                for l in f.readlines()[-6:]: self.history.append(json.loads(l))
+                for l in f.readlines()[-10:]: self.history.append(json.loads(l))
 
     def triage(self, user_input):
-        prompt = f"Analyze: '{user_input}'. Is this a casual CHAT (question/talk) or a specific TASK (action/build)? Reply ONLY 'CHAT' or 'TASK'."
-        return self.client_lite.generate(prompt).strip().upper()
+        prompt = f"Analyze: '{user_input}'. Is this a casual CHAT or a TASK? Reply ONLY 'CHAT' or 'TASK'."
+        res = self.client_lite.generate(prompt)
+        return res.strip().upper() if res else "CHAT"
 
     def solve_task(self, user_goal):
-        status("[*] Planning Task...")
+        status("[*] Planning...")
         sys_instr = f"IDENTITY:\n{read_file_safe(SOUL_FILE)}"
         plan_raw = self.client_pro.generate(f"Goal: {user_goal}\nPlan 2 tasks. JSON: [{{'id':1, 'task':'...'}}]", system_instruction=sys_instr, json_mode=True)
         try:
             plan = json.loads(plan_raw.strip("`json \n"))
             results = ""
             for step in plan:
-                status(f"\n[*] Executing {step['id']}...")
-                res = self.client_lite.generate(f"Task: {step['task']}\nContext: {results}")
+                res = self.client_lite.generate(f"Task: {step['task']}\nResults: {results}")
                 results += f"\nResult {step['id']}: {res}"
-            status("\n[*] Finalizing...")
             return self.client_lite.generate(f"Goal: {user_goal}\nResults: {results}\nFormat response.", system_instruction=sys_instr)
         except: return "Task failed."
 
     def process(self, user_input):
-        classification = self.triage(user_input)
-        if "TASK" in classification:
+        if "TASK" in self.triage(user_input):
             response = self.solve_task(user_input)
         else:
             response = self.client_lite.generate(user_input, system_instruction=read_file_safe(SOUL_FILE), history=self.history)
         
-        # Save history
-        entry_user = {"role": "user", "text": user_input}
-        entry_model = {"role": "model", "text": response}
-        self.history.extend([entry_user, entry_model])
-        with open(CHAT_LOG, 'a') as f:
-            f.write(json.dumps(entry_user) + "\n")
-            f.write(json.dumps(entry_model) + "\n")
+        if response:
+            entry_user = {"role": "user", "text": user_input}
+            entry_model = {"role": "model", "text": response}
+            self.history.extend([entry_user, entry_model])
+            with open(CHAT_LOG, 'a') as f:
+                f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
         return response
-
-def interactive_loop(api_key):
-    mas = GeminiMAS(api_key)
-    print("\n" + "="*50 + "\nGeminiMAS Hybrid Mode (Chat or Task)\n" + "="*50)
-    while True:
-        try:
-            inp = input("\n[You] > ").strip()
-            if inp.lower() in ['exit', 'quit']: break
-            print(f"\n[Agent] > {mas.process(inp)}")
-        except KeyboardInterrupt: break
 
 if __name__ == "__main__":
     key = os.getenv("GEMINI_API_KEY")
-    if key: interactive_loop(key)
+    if not key: sys.exit(1)
+    mas = GeminiMAS(key)
+    if len(sys.argv) > 1:
+        print(mas.process(" ".join(sys.argv[1:])))
+    else:
+        print("\nGeminiMAS v6.5 Hybrid Shell\n" + "="*30)
+        while True:
+            try:
+                inp = input("\n[You] > ").strip()
+                if inp.lower() in ['exit', 'quit']: break
+                print(f"\n[Agent] > {mas.process(inp)}")
+            except KeyboardInterrupt: break

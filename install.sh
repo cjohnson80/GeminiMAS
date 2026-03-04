@@ -1,11 +1,11 @@
 #!/bin/bash
-# GeminiMAS Universal Installer v6.4
-# Hybrid Edition: Chat + Task Planning
+# GeminiMAS Universal Installer v6.5
+# True Chat Edition: Seamless Telegram & CLI Chatbot
 
 set -e
 
 echo "==============================================="
-echo " Installing GeminiMAS v6.4 (Hybrid Edition)"
+echo " Installing GeminiMAS v6.5 (True Chat Edition)"
 echo "==============================================="
 
 # 1. System Dependencies
@@ -16,7 +16,7 @@ fi
 AGENT_ROOT="$HOME/gemini_agents"
 mkdir -p "$AGENT_ROOT"/{workspace,memory,logs,core,bin,skills}
 
-# 2. Write Python Engine
+# 2. Write Python Engine (v6.5)
 cat << 'EOF' > "$AGENT_ROOT/bin/gemini_mas.py"
 import json, os, urllib.request, urllib.error, sys, threading, queue, subprocess, time, base64, mimetypes
 from datetime import datetime
@@ -62,82 +62,88 @@ class GeminiMAS:
         self.history = []
         if os.path.exists(CHAT_LOG):
             with open(CHAT_LOG, 'r') as f:
-                for l in f.readlines()[-6:]: self.history.append(json.loads(l))
+                for l in f.readlines()[-10:]: self.history.append(json.loads(l))
 
     def triage(self, user_input):
-        prompt = f"Analyze: '{user_input}'. Is this a casual CHAT (question/talk) or a specific TASK (action/build)? Reply ONLY 'CHAT' or 'TASK'."
-        return self.client_lite.generate(prompt).strip().upper()
+        prompt = f"Analyze: '{user_input}'. Is this a casual CHAT or a TASK? Reply ONLY 'CHAT' or 'TASK'."
+        res = self.client_lite.generate(prompt)
+        return res.strip().upper() if res else "CHAT"
 
     def solve_task(self, user_goal):
-        status("[*] Planning Task...")
+        status("[*] Planning...")
         sys_instr = f"IDENTITY:\n{read_file_safe(SOUL_FILE)}"
         plan_raw = self.client_pro.generate(f"Goal: {user_goal}\nPlan 2 tasks. JSON: [{{'id':1, 'task':'...'}}]", system_instruction=sys_instr, json_mode=True)
         try:
             plan = json.loads(plan_raw.strip("`json \n"))
             results = ""
             for step in plan:
-                status(f"\n[*] Executing {step['id']}...")
-                res = self.client_lite.generate(f"Task: {step['task']}\nContext: {results}")
+                res = self.client_lite.generate(f"Task: {step['task']}\nResults: {results}")
                 results += f"\nResult {step['id']}: {res}"
-            status("\n[*] Finalizing...")
             return self.client_lite.generate(f"Goal: {user_goal}\nResults: {results}\nFormat response.", system_instruction=sys_instr)
         except: return "Task failed."
 
     def process(self, user_input):
-        classification = self.triage(user_input)
-        if "TASK" in classification:
+        if "TASK" in self.triage(user_input):
             response = self.solve_task(user_input)
         else:
             response = self.client_lite.generate(user_input, system_instruction=read_file_safe(SOUL_FILE), history=self.history)
         
-        # Save history
-        entry_user = {"role": "user", "text": user_input}
-        entry_model = {"role": "model", "text": response}
-        self.history.extend([entry_user, entry_model])
-        with open(CHAT_LOG, 'a') as f:
-            f.write(json.dumps(entry_user) + "\n")
-            f.write(json.dumps(entry_model) + "\n")
+        if response:
+            entry_user = {"role": "user", "text": user_input}
+            entry_model = {"role": "model", "text": response}
+            self.history.extend([entry_user, entry_model])
+            with open(CHAT_LOG, 'a') as f:
+                f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
         return response
-
-def interactive_loop(api_key):
-    mas = GeminiMAS(api_key)
-    print("\n" + "="*50 + "\nGeminiMAS Hybrid Mode (Chat or Task)\n" + "="*50)
-    while True:
-        try:
-            inp = input("\n[You] > ").strip()
-            if inp.lower() in ['exit', 'quit']: break
-            print(f"\n[Agent] > {mas.process(inp)}")
-        except KeyboardInterrupt: break
 
 if __name__ == "__main__":
     key = os.getenv("GEMINI_API_KEY")
-    if key: interactive_loop(key)
+    if not key: sys.exit(1)
+    mas = GeminiMAS(key)
+    if len(sys.argv) > 1:
+        print(mas.process(" ".join(sys.argv[1:])))
+    else:
+        print("\nGeminiMAS v6.5 Hybrid Shell\n" + "="*30)
+        while True:
+            try:
+                inp = input("\n[You] > ").strip()
+                if inp.lower() in ['exit', 'quit']: break
+                print(f"\n[Agent] > {mas.process(inp)}")
+            except KeyboardInterrupt: break
 EOF
 
-# 3. Rest of installer (wrapper, systemd, etc.)
-# [ ... identical to v6.3 ... ]
+# 3. Write Telegram Gateway (v3.5 - Natural Chat)
 cat << 'EOF' > "$AGENT_ROOT/bin/tg_gateway.py"
-import json, os, urllib.request, time, subprocess, sys, socket
+import json, os, urllib.request, time, subprocess, sys
 AGENT_ROOT = os.path.expanduser("~/gemini_agents")
-ENV_FILE = os.path.join(AGENT_ROOT, ".env")
+sys.path.append(os.path.join(AGENT_ROOT, "bin"))
+from gemini_mas import GeminiMAS
+
 def get_env(key):
-    if not os.path.exists(ENV_FILE): return os.getenv(key)
-    with open(ENV_FILE, 'r') as f:
-        for line in f:
-            if line.startswith(f"{key}="): return line.split('=')[1].strip().strip('"')
+    path = os.path.join(AGENT_ROOT, ".env")
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            for line in f:
+                if line.startswith(f"{key}="): return line.split('=')[1].strip().strip('"')
     return os.getenv(key)
+
 COMPUTER_NAME = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
 BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_ID = get_env("TELEGRAM_USER_ID")
+API_KEY = get_env("GEMINI_API_KEY")
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/"
+
 def send_msg(chat_id, text):
     url = f"{BASE_URL}sendMessage"
     payload = {"chat_id": chat_id, "text": f"[{COMPUTER_NAME}] {text}"}
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
     try: urllib.request.urlopen(req)
     except: pass
+
 def main():
-    print(f"[*] Telegram Gateway v3.4 on '{COMPUTER_NAME}'")
+    if not API_KEY: return
+    mas = GeminiMAS(API_KEY)
+    print(f"[*] Telegram v3.5 (Natural Chat) Active on '{COMPUTER_NAME}'")
     offset = 0
     while True:
         try:
@@ -147,23 +153,23 @@ def main():
                     for up in updates["result"]:
                         offset = up["update_id"] + 1
                         msg = up.get("message")
-                        if not msg: continue
-                        user_id = str(msg.get("from", {}).get("id"))
-                        if user_id != ALLOWED_USER_ID: continue
+                        if not msg or str(msg.get("from", {}).get("id")) != ALLOWED_USER_ID: continue
                         text = msg.get("text", "")
                         if text.startswith("/status"):
                             res = subprocess.run("free -h", shell=True, capture_output=True, text=True).stdout
                             send_msg(msg["chat"]["id"], f"Status:\n{res}")
-                        elif text.startswith("/all ") or text.startswith(f"/{COMPUTER_NAME.lower()} "):
-                            goal = text.split(" ", 1)[1]
-                            res = subprocess.run([os.path.expanduser("~/.local/bin/gagent"), goal], capture_output=True, text=True).stdout
-                            send_msg(msg["chat"]["id"], res[:3500])
+                        else:
+                            # Natural Chat / Triage Task
+                            response = mas.process(text)
+                            send_msg(msg["chat"]["id"], response[:4000])
         except: pass
         time.sleep(1)
+
 if __name__ == "__main__":
     main()
 EOF
 
+# 4. Global Wrapper
 mkdir -p "$HOME/.local/bin"
 cat << 'EOF' > "$HOME/.local/bin/gagent"
 #!/bin/bash
@@ -175,6 +181,7 @@ EOF
 chmod +x "$HOME/.local/bin/gagent"
 chmod +x "$AGENT_ROOT/bin/gemini_mas.py"
 
+# 5. Systemd Service
 SERVICE_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SERVICE_DIR"
 cat << EOF > "$SERVICE_DIR/gagent-bot.service"
@@ -192,4 +199,4 @@ systemctl --user daemon-reload
 systemctl --user enable gagent-bot.service
 systemctl --user restart gagent-bot.service
 
-echo "[*] GeminiMAS v6.4 Installed Successfully."
+echo "[*] GeminiMAS v6.5 Installed Successfully."
