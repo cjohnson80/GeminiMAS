@@ -32,3 +32,4 @@ GeminiMAS is a high-density, multi-agentic system designed to run on low-resourc
 ## 🧠 Memory & Skills
 - **Skills:** Add custom Markdown guides to `~/gemini_agents/skills/` to teach the agents new tricks.
 - **Memory:** All interactions are semantically indexed in `~/gemini_agents/memory/memory.db`.
+dummy update
