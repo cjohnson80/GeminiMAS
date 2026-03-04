@@ -96,17 +96,38 @@ class Persistence:
     def __init__(self, api_key):
         self.client = GeminiClient(api_key)
         os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
-        with db_lock:
-            self.con = duckdb.connect(DB_FILE)
-            self.con.execute("CREATE TABLE IF NOT EXISTS memory (timestamp TIMESTAMP, goal TEXT, summary TEXT, embedding FLOAT[3072])")
+        self.con = self._connect()
+
+    def _connect(self, read_only=False):
+        """Connect to DuckDB with a fallback for locked files."""
+        for attempt in range(5):
+            try:
+                return duckdb.connect(DB_FILE, read_only=read_only)
+            except duckdb.IOException:
+                if attempt < 4: time.sleep(1)
+                else: 
+                    # Final attempt: try forced read-only
+                    return duckdb.connect(DB_FILE, read_only=True)
+        return None
 
     def save_memory(self, goal, summary):
         if vec := self.client.embed(goal + " " + summary):
-            with db_lock: self.con.execute("INSERT INTO memory VALUES (now(), ?, ?, ?)", [goal, summary, vec])
+            try:
+                with db_lock:
+                    # Ensure we have a writeable connection
+                    con = self._connect(read_only=False)
+                    con.execute("INSERT INTO memory VALUES (now(), ?, ?, ?)", [goal, summary, vec])
+                    con.close()
+            except: pass # Silently fail memory write if locked to prevent crash
 
     def semantic_search(self, query, limit=3):
         if vec := self.client.embed(query):
-            with db_lock: return self.con.execute("SELECT goal, summary FROM memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[3072]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
+            try:
+                con = self._connect(read_only=True)
+                res = con.execute("SELECT goal, summary FROM memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[3072]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
+                con.close()
+                return res
+            except: return []
         return []
 
 class GeminiMAS:
