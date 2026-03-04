@@ -1,4 +1,4 @@
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 import time
 import functools
@@ -49,15 +49,41 @@ def run_heartbeat():
     # Evolution Protocol: Logic placeholder for internal self-improvement
     print("[*] Heartbeat running. Checking for codebase optimizations...")
 
-    # In a real scenario, this would:
-    # 1. Analyze logs/errors
-    # 2. Propose fix
-    # 3. Create branch
-    # 4. Notify user via Telegram
-
     # Simple check for disk space as a "heartbeat" task
-    usage = subprocess.check_output(['df', '-h', '/']).decode()
-    print(f"[*] System Health Check:\n{usage}")
+    try:
+        usage = subprocess.check_output(['df', '-h', '/']).decode()
+        print(f"[*] System Health Check:\n{usage}")
+    except Exception as e:
+        print(f"[!] Error during health check: {e}")
+
+def run_repl():
+    print(f"GeminiMAS Core v{__version__} - Interactive Terminal Interface")
+    print("Type 'exit' or 'quit' to leave.\n")
+    client = GeminiClient()
+
+    # Basic conversation history (last 5 exchanges to save tokens/memory on Celeron)
+    history = []
+
+    while True:
+        try:
+            prompt = input("gagent> ").strip()
+            if not prompt: continue
+            if prompt.lower() in ['exit', 'quit']: break
+
+            # Simple context management
+            full_prompt = "\n".join(history + [prompt])
+            response = client.generate(full_prompt)
+            print(f"\n{response}\n")
+
+            history.append(f"User: {prompt}")
+            history.append(f"Assistant: {response}")
+            if len(history) > 10: history = history[-10:]
+
+        except KeyboardInterrupt:
+            print("\nExiting...")
+            break
+        except Exception as e:
+            print(f"\nError: {e}\n")
 
 def main():
     parser = argparse.ArgumentParser(description='GeminiMAS Core Engine')
@@ -77,8 +103,17 @@ def main():
         if prompt:
             client = GeminiClient()
             print(client.generate(prompt))
+        elif not sys.stdin.isatty():
+            # If piped input, read from stdin
+            piped_prompt = sys.stdin.read().strip()
+            if piped_prompt:
+                client = GeminiClient()
+                print(client.generate(piped_prompt))
+            else:
+                parser.print_help()
         else:
-            parser.print_help()
+            # Interactive terminal if no args and is a TTY
+            run_repl()
 
 if __name__ == '__main__':
     main()
