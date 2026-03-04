@@ -93,6 +93,7 @@ cat << 'EOF' > "$AGENT_ROOT/core/SOUL.md"
 - **Source Repo:** \`$REPO_ROOT\`
 - **Constraint:** Always optimize for low-resource hardware (Intel Celeron).
 - **Evolution Rules:** You have the authority to modify your source code and the repo. Always use git branches for optimizations.
+- **Conservation Principle:** NEVER delete code or features from the repository. If a feature is suboptimal for your hardware, DISABLE it in \`local_config.json\` instead of removing it from the codebase.
 EOF
 
 # Update the HEARTBEAT for Evolution
@@ -101,15 +102,14 @@ cat << 'EOF' > "$AGENT_ROOT/core/HEARTBEAT.md"
 # Active Goals
 - [ ] **EVOLUTION PROTOCOL (GLOBAL):** Examine your source code in \`$REPO_ROOT/bin/\`. Invent a new lightweight feature or optimization for ALL machines.
       1. Use \`run_shell\` to \`cd $REPO_ROOT\`.
-      2. Create a unique branch based on your machine name: \`git checkout -b evolution-$CURRENT_MACHINE-$(date +%s)\`.
-      3. Implement the feature and update \`README.md\`.
+      2. Create a unique branch: \`git checkout -b evolution-\$CURRENT_MACHINE-$(date +%s)\`.
+      3. Implement the feature. **Mandate:** DO NOT delete existing features.
       4. Use \`run_shell\` to \`git add .\`, \`git commit -m \"Global Optimization: [Feature Description]\"\`, and \`git push origin HEAD\`.
-      5. Notify the user via Telegram and ask them to reply with \`/approve [branch_name]\`.
+      5. Notify the user via Telegram for approval.
 
-- [ ] **EVOLUTION PROTOCOL (LOCAL):** Optimize your performance for this specific machine (\`$CURRENT_MACHINE\`).
-      1. Analyze your resource usage and \`LOCAL_HARDWARE_CONFIG\`.
-      2. If you need to tune performance (e.g., reduce threads, adjust cache), write the new config directly to \`$AGENT_ROOT/core/local_config.json\`.
-      3. These changes remain private and local to this machine.
+- [ ] **EVOLUTION PROTOCOL (LOCAL):** Optimize your performance for this specific machine (\`\$CURRENT_MACHINE\`).
+      1. If you need to stop using a feature (e.g., too much RAM), update the \`disabled_features\` list in \`$AGENT_ROOT/core/local_config.json\`.
+      2. DO NOT delete the code for that feature from the repo.
 EOF
 
 # --- 6. Install Binaries ---

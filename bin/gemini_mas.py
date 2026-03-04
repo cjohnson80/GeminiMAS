@@ -30,10 +30,37 @@ SKILLS_DIR = os.path.join(AGENT_ROOT, "skills")
 db_lock = threading.Lock()
 
 def read_local_config():
+    default_cfg = {
+        "max_threads": 2,
+        "cache_size": "512MB",
+        "model_overrides": {},
+        "disabled_features": []
+    }
     if not os.path.exists(LOCAL_CONFIG):
-        return {"max_threads": 2, "cache_size": "512MB", "model_overrides": {}}
-    with open(LOCAL_CONFIG, 'r') as f:
-        return json.load(f)
+        return default_cfg
+    try:
+        with open(LOCAL_CONFIG, 'r') as f:
+            cfg = json.load(f)
+            # Ensure keys exist
+            for k, v in default_cfg.items():
+                if k not in cfg: cfg[k] = v
+            return cfg
+    except: return default_cfg
+
+def is_feature_enabled(feature_name):
+    cfg = read_local_config()
+    return feature_name not in cfg.get("disabled_features", [])
+
+def toggle_feature(feature_name, enable=True):
+    cfg = read_local_config()
+    disabled = cfg.get("disabled_features", [])
+    if enable and feature_name in disabled:
+        disabled.remove(feature_name)
+    elif not enable and feature_name not in disabled:
+        disabled.append(feature_name)
+    cfg["disabled_features"] = disabled
+    write_local_config(cfg)
+    return f"Feature '{feature_name}' is now {'enabled' if enable else 'disabled'}."
 
 def write_local_config(config):
     with open(LOCAL_CONFIG, 'w') as f:
@@ -395,19 +422,38 @@ def heartbeat_daemon(api_key):
 def interactive_loop(api_key):
     mas = GeminiMAS(api_key)
     print("\n" + "="*50 + f"\nGeminiMAS v{__version__} (Evolution Shell)\n" + "="*50)
+    print("Commands: /enable [f], /disable [f], /config, /help, exit")
     while True:
         try:
             inp = input("\n[You] > ").strip()
+            if not inp: continue
             if inp.lower() in ['exit', 'quit']: break
             if inp.lower() == 'heartbeat': heartbeat_daemon(api_key); continue
-            if not inp: continue
+
+            # Local Management Commands
+            if inp.startswith("/disable "):
+                print(toggle_feature(inp.split(" ", 1)[1].strip(), enable=False))
+                continue
+            if inp.startswith("/enable "):
+                print(toggle_feature(inp.split(" ", 1)[1].strip(), enable=True))
+                continue
+            if inp.lower() == "/config":
+                print(json.dumps(read_local_config(), indent=4))
+                continue
+            if inp.lower() == "/help":
+                print("\n[Help] GeminiMAS Interactive Shell")
+                print("/config          - View local machine configuration")
+                print("/enable [name]   - Enable a disabled feature")
+                print("/disable [name]  - Disable a feature locally (without deleting code)")
+                print("heartbeat        - Start the heartbeat daemon manually")
+                print("exit/quit        - Close the shell\n")
+                continue
 
             print("\n[Agent] > ", end="", flush=True)
             for chunk in mas.process(inp, stream=True):
                 print(chunk, end="", flush=True)
             print("\n")
         except KeyboardInterrupt: break
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GeminiMAS Core Engine')
     subparsers = parser.add_subparsers(dest='command')
