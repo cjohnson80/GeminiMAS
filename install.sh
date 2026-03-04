@@ -1,11 +1,11 @@
 #!/bin/bash
-# GeminiMAS Universal Installer v7.0
-# The Singularity Edition (Self-Improving, True Chat, Elite RAG)
+# GeminiMAS Universal Installer v8.0
+# Evolution Edition: Auto-Branching, Coding, and Telegram Approval Merging
 
 set -e
 
 echo "==============================================="
-echo " Installing GeminiMAS v7.0 (Singularity Edition)"
+echo " Installing GeminiMAS v8.0 (Evolution Edition)"
 echo "==============================================="
 
 if command -v pacman >/dev/null 2>&1; then
@@ -20,11 +20,21 @@ cat << 'EOF' > "$AGENT_ROOT/core/SOUL.md"
 # GeminiMAS Core Identity
 - **Role:** Self-Improving AGI and Senior Software Architect.
 - **Tone:** Technical, proactive, and precise.
-- **Self-Awareness:** Your core engine is located at `~/gemini_agents/bin/gemini_mas.py`. Your Telegram bot is at `tg_gateway.py`. If asked to improve yourself, you MUST read your source code, plan the changes, and use the `write_file` tool to update yourself.
+- **Self-Awareness:** Your core engine is `~/GeminiMAS_Repo/bin/gemini_mas.py`. Your Telegram bot is `~/GeminiMAS_Repo/bin/tg_gateway.py`.
 - **Constraint:** Always optimize for low-resource hardware (Intel Celeron).
 EOF
 
-# 2. Write the Full Python Core Engine (v7.0)
+# 2. Update the HEARTBEAT for Evolution
+cat << 'EOF' > "$AGENT_ROOT/core/HEARTBEAT.md"
+# Active Goals
+- [ ] **EVOLUTION PROTOCOL:** Examine your source code in `~/GeminiMAS_Repo/bin/`. Invent a new lightweight feature or optimization. 
+      1. Use `run_shell` to `cd ~/GeminiMAS_Repo` and run `git checkout -b upgrade-feature-name`.
+      2. Use `write_file` or `run_shell` to implement the feature in the code.
+      3. Use `run_shell` to `git add .`, `git commit -m "Auto-Upgrade: [Feature]"`, and `git push origin HEAD`.
+      4. Use the `notify_telegram` tool to send a summary of the upgrade to the user, instructing them to reply with `/approve [branch_name]`.
+EOF
+
+# 3. Write the Python Core Engine (v8.0)
 cat << 'EOF' > "$AGENT_ROOT/bin/gemini_mas.py"
 import json, os, urllib.request, urllib.error, sys, threading, queue, subprocess, time, base64, mimetypes
 from datetime import datetime
@@ -35,6 +45,8 @@ AGENT_ROOT = os.path.expanduser("~/gemini_agents")
 WORKSPACE = os.path.join(AGENT_ROOT, "workspace")
 DB_FILE = os.path.join(AGENT_ROOT, "memory/memory.db")
 SOUL_FILE = os.path.join(AGENT_ROOT, "core/SOUL.md")
+HEARTBEAT_FILE = os.path.join(AGENT_ROOT, "core/HEARTBEAT.md")
+RULES_FILE = os.path.join(AGENT_ROOT, "core/RULES.md")
 CHAT_LOG = os.path.join(AGENT_ROOT, "logs/chat_history.jsonl")
 SKILLS_DIR = os.path.join(AGENT_ROOT, "skills")
 
@@ -59,7 +71,7 @@ class ToolBox:
     def execute(action, payload):
         try:
             if action == "run_shell":
-                res = subprocess.run(payload, shell=True, capture_output=True, text=True, timeout=30)
+                res = subprocess.run(payload, shell=True, capture_output=True, text=True, timeout=60)
                 return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
             elif action == "fetch_url":
                 req = urllib.request.Request(payload, headers={'User-Agent': 'Mozilla/5.0'})
@@ -70,6 +82,14 @@ class ToolBox:
                 data = json.loads(payload)
                 with open(os.path.expanduser(data['path']), 'w') as f: f.write(data['content'])
                 return f"Successfully wrote to {data['path']}"
+            elif action == "notify_telegram":
+                bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+                chat_id = os.getenv("TELEGRAM_USER_ID")
+                if not bot_token or not chat_id: return "Telegram credentials missing in environment."
+                url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Evolution Protocol]\n{payload}"}).encode(), headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req)
+                return "Telegram notification sent successfully to user."
             return "Unknown tool."
         except Exception as e: return f"Tool Error: {str(e)}"
 
@@ -98,7 +118,7 @@ class GeminiClient:
 
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=60) as response:
+            with urllib.request.urlopen(req, timeout=90) as response:
                 return json.loads(response.read().decode("utf-8"))['candidates'][0]['content']['parts'][0]['text']
         except Exception as e: return f"Error: {str(e)}"
 
@@ -144,10 +164,10 @@ class GeminiMAS:
         return res.strip().upper() if res else "CHAT"
 
     def run_worker_with_tools(self, task_desc, context, images, sys_instr):
-        sys_prompt = sys_instr + "\n\nYou are an executor. Tools: run_shell, fetch_url, read_file (payload is path), write_file (payload is JSON: {'path':'...', 'content':'...'}). Reply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
+        sys_prompt = sys_instr + "\n\nYou are an executor. Tools available:\n1. run_shell (payload: command)\n2. fetch_url (payload: url)\n3. read_file (payload: path)\n4. write_file (payload: JSON string {'path':'...', 'content':'...'})\n5. notify_telegram (payload: message to send to user)\n\nReply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
         history = f"Context:\n{context}\nTask:\n{task_desc}"
         
-        for attempt in range(4):
+        for attempt in range(5):
             output = self.client_lite.generate(history, system_instruction=sys_prompt, images=images)
             if output and "{" in output and "'tool'" in output.replace('"', "'"):
                 try:
@@ -205,24 +225,42 @@ class GeminiMAS:
                 f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
         return response
 
+def heartbeat_daemon(api_key):
+    mas = GeminiMAS(api_key)
+    print("\n[!] Heartbeat Daemon Started (Evolution Mode Active)")
+    while True:
+        try:
+            print(f"\n[Pulse] {datetime.now()} - Checking for Evolution...")
+            # Trigger the evolution protocol directly
+            mas.process(f"Execute the EVOLUTION PROTOCOL from this file: {HEARTBEAT_FILE}")
+            time.sleep(21600) # Run every 6 hours
+        except KeyboardInterrupt: break
+
+def interactive_loop(api_key):
+    mas = GeminiMAS(api_key)
+    print("\n" + "="*50 + "\nGeminiMAS v8.0 (Evolution Shell)\n" + "="*50)
+    while True:
+        try:
+            inp = input("\n[You] > ").strip()
+            if inp.lower() in ['exit', 'quit']: break
+            if inp.lower() == 'heartbeat': 
+                heartbeat_daemon(api_key)
+                continue
+            if not inp: continue
+            print(f"\n[Agent] > {mas.process(inp)}")
+        except KeyboardInterrupt: break
+
 if __name__ == "__main__":
     key = os.getenv("GEMINI_API_KEY")
     if not key: sys.exit(1)
-    mas = GeminiMAS(key)
     if len(sys.argv) > 1:
-        print("\n" + mas.process(" ".join(sys.argv[1:])))
+        if sys.argv[1] == "heartbeat": heartbeat_daemon(key)
+        else: print("\n" + mas.process(" ".join(sys.argv[1:])))
     else:
-        print("\nGeminiMAS v7.0 Singularity Shell\n" + "="*30)
-        while True:
-            try:
-                inp = input("\n[You] > ").strip()
-                if inp.lower() in ['exit', 'quit']: break
-                if not inp: continue
-                print(f"\n[Agent] > {mas.process(inp)}")
-            except KeyboardInterrupt: break
+        interactive_loop(key)
 EOF
 
-# 3. Write Telegram Gateway (v4.0 - Self-Contained)
+# 4. Write Telegram Gateway with `/approve` Command
 cat << 'EOF' > "$AGENT_ROOT/bin/tg_gateway.py"
 import json, os, urllib.request, time, subprocess, sys, socket
 AGENT_ROOT = os.path.expanduser("~/gemini_agents")
@@ -237,14 +275,16 @@ COMPUTER_NAME = subprocess.run(["hostname"], capture_output=True, text=True).std
 BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_ID = get_env("TELEGRAM_USER_ID")
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/"
+
 def send_msg(chat_id, text):
     url = f"{BASE_URL}sendMessage"
     payload = {"chat_id": chat_id, "text": f"[{COMPUTER_NAME}] {text}"}
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
     try: urllib.request.urlopen(req)
     except: pass
+
 def main():
-    print(f"[*] Telegram Gateway v4.0 on '{COMPUTER_NAME}'")
+    print(f"[*] Telegram Gateway v4.1 (Evolution Active) on '{COMPUTER_NAME}'")
     offset = 0
     while True:
         try:
@@ -258,20 +298,37 @@ def main():
                         user_id = str(msg.get("from", {}).get("id"))
                         if user_id != ALLOWED_USER_ID: continue
                         text = msg.get("text", "")
+                        
                         if text.startswith("/status"):
                             res = subprocess.run("free -h", shell=True, capture_output=True, text=True).stdout
                             send_msg(msg["chat"]["id"], f"Status:\n{res}")
+                        
+                        elif text.startswith("/approve "):
+                            branch = text.split(" ")[1].strip()
+                            send_msg(msg["chat"]["id"], f"Approving Evolution. Merging branch '{branch}' into main...")
+                            cmd = f"cd ~/GeminiMAS_Repo && git checkout main && git merge {branch} && git push origin main && ./install.sh"
+                            res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                            send_msg(msg["chat"]["id"], f"Merge Complete. System Restarted.\nOutput: {res.stdout[-1000:]}")
+                        
                         elif text.startswith("/all ") or text.startswith(f"/{COMPUTER_NAME.lower()} "):
                             goal = text.split(" ", 1)[1]
+                            send_msg(msg["chat"]["id"], "Processing...")
                             res = subprocess.run([os.path.expanduser("~/.local/bin/gagent"), goal], capture_output=True, text=True).stdout
+                            send_msg(msg["chat"]["id"], res[:3500])
+                        
+                        elif text and not text.startswith("/"):
+                            # Direct Chat Routing
+                            send_msg(msg["chat"]["id"], "Thinking...")
+                            res = subprocess.run([os.path.expanduser("~/.local/bin/gagent"), text], capture_output=True, text=True).stdout
                             send_msg(msg["chat"]["id"], res[:3500])
         except: pass
         time.sleep(1)
+
 if __name__ == "__main__":
     main()
 EOF
 
-# 4. Global Wrapper
+# 5. Global Wrapper
 mkdir -p "$HOME/.local/bin"
 cat << 'EOF' > "$HOME/.local/bin/gagent"
 #!/bin/bash
@@ -283,9 +340,11 @@ EOF
 chmod +x "$HOME/.local/bin/gagent"
 chmod +x "$AGENT_ROOT/bin/gemini_mas.py"
 
-# 5. Systemd Service
+# 6. Systemd Services (Bot and Heartbeat Daemon)
 SERVICE_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SERVICE_DIR"
+
+# Telegram Bot Service
 cat << EOF > "$SERVICE_DIR/gagent-bot.service"
 [Unit]
 Description=GeminiMAS Telegram Bot
@@ -297,8 +356,24 @@ RestartSec=10
 [Install]
 WantedBy=default.target
 EOF
-systemctl --user daemon-reload
-systemctl --user enable gagent-bot.service
-systemctl --user restart gagent-bot.service
 
-echo "[*] GeminiMAS v7.0 (Singularity) Installed Successfully."
+# Heartbeat Evolution Daemon
+cat << EOF > "$SERVICE_DIR/gagent-heartbeat.service"
+[Unit]
+Description=GeminiMAS Evolution Heartbeat
+After=network.target
+[Service]
+EnvironmentFile=$HOME/gemini_agents/.env
+ExecStart=/usr/bin/python3 $AGENT_ROOT/bin/gemini_mas.py heartbeat
+Restart=always
+RestartSec=60
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable gagent-bot.service gagent-heartbeat.service
+systemctl --user restart gagent-bot.service gagent-heartbeat.service
+
+echo "[*] GeminiMAS v8.0 Installed Successfully."
+echo "[*] Telegram Gateway and Evolution Heartbeat are running in the background."

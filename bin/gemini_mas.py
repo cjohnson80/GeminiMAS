@@ -7,6 +7,8 @@ AGENT_ROOT = os.path.expanduser("~/gemini_agents")
 WORKSPACE = os.path.join(AGENT_ROOT, "workspace")
 DB_FILE = os.path.join(AGENT_ROOT, "memory/memory.db")
 SOUL_FILE = os.path.join(AGENT_ROOT, "core/SOUL.md")
+HEARTBEAT_FILE = os.path.join(AGENT_ROOT, "core/HEARTBEAT.md")
+RULES_FILE = os.path.join(AGENT_ROOT, "core/RULES.md")
 CHAT_LOG = os.path.join(AGENT_ROOT, "logs/chat_history.jsonl")
 SKILLS_DIR = os.path.join(AGENT_ROOT, "skills")
 
@@ -31,7 +33,7 @@ class ToolBox:
     def execute(action, payload):
         try:
             if action == "run_shell":
-                res = subprocess.run(payload, shell=True, capture_output=True, text=True, timeout=30)
+                res = subprocess.run(payload, shell=True, capture_output=True, text=True, timeout=60)
                 return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
             elif action == "fetch_url":
                 req = urllib.request.Request(payload, headers={'User-Agent': 'Mozilla/5.0'})
@@ -42,6 +44,14 @@ class ToolBox:
                 data = json.loads(payload)
                 with open(os.path.expanduser(data['path']), 'w') as f: f.write(data['content'])
                 return f"Successfully wrote to {data['path']}"
+            elif action == "notify_telegram":
+                bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+                chat_id = os.getenv("TELEGRAM_USER_ID")
+                if not bot_token or not chat_id: return "Telegram credentials missing in environment."
+                url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Evolution Protocol]\n{payload}"}).encode(), headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req)
+                return "Telegram notification sent successfully to user."
             return "Unknown tool."
         except Exception as e: return f"Tool Error: {str(e)}"
 
@@ -70,7 +80,7 @@ class GeminiClient:
 
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=60) as response:
+            with urllib.request.urlopen(req, timeout=90) as response:
                 return json.loads(response.read().decode("utf-8"))['candidates'][0]['content']['parts'][0]['text']
         except Exception as e: return f"Error: {str(e)}"
 
@@ -116,10 +126,10 @@ class GeminiMAS:
         return res.strip().upper() if res else "CHAT"
 
     def run_worker_with_tools(self, task_desc, context, images, sys_instr):
-        sys_prompt = sys_instr + "\n\nYou are an executor. Tools: run_shell, fetch_url, read_file (payload is path), write_file (payload is JSON: {'path':'...', 'content':'...'}). Reply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
+        sys_prompt = sys_instr + "\n\nYou are an executor. Tools available:\n1. run_shell (payload: command)\n2. fetch_url (payload: url)\n3. read_file (payload: path)\n4. write_file (payload: JSON string {'path':'...', 'content':'...'})\n5. notify_telegram (payload: message to send to user)\n\nReply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
         history = f"Context:\n{context}\nTask:\n{task_desc}"
         
-        for attempt in range(4):
+        for attempt in range(5):
             output = self.client_lite.generate(history, system_instruction=sys_prompt, images=images)
             if output and "{" in output and "'tool'" in output.replace('"', "'"):
                 try:
@@ -177,18 +187,36 @@ class GeminiMAS:
                 f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
         return response
 
+def heartbeat_daemon(api_key):
+    mas = GeminiMAS(api_key)
+    print("\n[!] Heartbeat Daemon Started (Evolution Mode Active)")
+    while True:
+        try:
+            print(f"\n[Pulse] {datetime.now()} - Checking for Evolution...")
+            # Trigger the evolution protocol directly
+            mas.process(f"Execute the EVOLUTION PROTOCOL from this file: {HEARTBEAT_FILE}")
+            time.sleep(21600) # Run every 6 hours
+        except KeyboardInterrupt: break
+
+def interactive_loop(api_key):
+    mas = GeminiMAS(api_key)
+    print("\n" + "="*50 + "\nGeminiMAS v8.0 (Evolution Shell)\n" + "="*50)
+    while True:
+        try:
+            inp = input("\n[You] > ").strip()
+            if inp.lower() in ['exit', 'quit']: break
+            if inp.lower() == 'heartbeat': 
+                heartbeat_daemon(api_key)
+                continue
+            if not inp: continue
+            print(f"\n[Agent] > {mas.process(inp)}")
+        except KeyboardInterrupt: break
+
 if __name__ == "__main__":
     key = os.getenv("GEMINI_API_KEY")
     if not key: sys.exit(1)
-    mas = GeminiMAS(key)
     if len(sys.argv) > 1:
-        print("\n" + mas.process(" ".join(sys.argv[1:])))
+        if sys.argv[1] == "heartbeat": heartbeat_daemon(key)
+        else: print("\n" + mas.process(" ".join(sys.argv[1:])))
     else:
-        print("\nGeminiMAS v7.0 Singularity Shell\n" + "="*30)
-        while True:
-            try:
-                inp = input("\n[You] > ").strip()
-                if inp.lower() in ['exit', 'quit']: break
-                if not inp: continue
-                print(f"\n[Agent] > {mas.process(inp)}")
-            except KeyboardInterrupt: break
+        interactive_loop(key)
