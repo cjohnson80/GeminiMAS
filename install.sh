@@ -1,11 +1,11 @@
 #!/bin/bash
-# GeminiMAS Universal Installer v8.0
+# GeminiMAS Universal Installer v8.2
 # Evolution Edition: Auto-Branching, Coding, and Telegram Approval Merging
 
 set -e
 
 echo "==============================================="
-echo " Installing GeminiMAS v8.0 (Evolution Edition)"
+echo " Installing GeminiMAS v8.2 (Evolution Edition)"
 echo "==============================================="
 
 AGENT_ROOT="$HOME/gemini_agents"
@@ -210,7 +210,7 @@ else
 fi
 
 echo "==============================================="
-echo "[*] GeminiMAS v8.0 Installed Successfully."
+echo "[*] GeminiMAS v8.2 Installed Successfully."
 echo "[*] Binary location: $AGENT_ROOT/bin"
 echo "[*] Venv location: $AGENT_ROOT/venv"
 echo "[*] Config location: $AGENT_ROOT/.env"
