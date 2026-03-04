@@ -12,6 +12,7 @@ import time
 import base64
 import mimetypes
 import argparse
+import multiprocessing
 from datetime import datetime
 import duckdb
 import polars as pl
@@ -29,10 +30,33 @@ SKILLS_DIR = os.path.join(AGENT_ROOT, "skills")
 # Threading Lock for DB
 db_lock = threading.Lock()
 
+def probe_system_defaults():
+    """Dynamically determine defaults based on hardware."""
+    cpu_count = multiprocessing.cpu_count()
+    mem_gb = 1 # Default fallback
+    try:
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                if 'MemTotal' in line:
+                    mem_gb = int(line.split()[1]) / (1024 * 1024)
+                    break
+    except: pass
+    
+    # Celeron / Low-Resource Logic
+    if mem_gb < 4 or cpu_count <= 2:
+        return {"max_threads": 2, "cache_size": "256MB", "profile": "low-resource"}
+    # High-End Logic
+    if mem_gb > 16:
+        return {"max_threads": max(4, cpu_count), "cache_size": "2GB", "profile": "high-performance"}
+    # Standard Logic
+    return {"max_threads": min(4, cpu_count), "cache_size": "512MB", "profile": "standard"}
+
 def read_local_config():
+    sys_defaults = probe_system_defaults()
     default_cfg = {
-        "max_threads": 2,
-        "cache_size": "512MB",
+        "max_threads": sys_defaults["max_threads"],
+        "cache_size": sys_defaults["cache_size"],
+        "profile": sys_defaults["profile"],
         "model_overrides": {},
         "disabled_features": []
     }
