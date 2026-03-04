@@ -25,34 +25,25 @@ def send_msg(chat_id, text, markdown=False):
 
 def get_dashboard():
     try:
-        # Get RAM
         with open('/proc/meminfo', 'r') as f:
             lines = f.readlines()
             total = int([l.split()[1] for l in lines if 'MemTotal' in l][0])
             avail = int([l.split()[1] for l in lines if 'MemAvailable' in l][0])
             used_pct = int(((total - avail) / total) * 100)
-        # Get CPU
         load = os.getloadavg()[0]
         cpu_pct = int((load / os.cpu_count()) * 100)
-        # Visual Bars
         def bar(pct):
             filled = int(pct / 10)
             return "[" + "█" * filled + "░" * (10 - filled) + "]"
         status_icon = "🟢" if used_pct < 70 else "🟠" if used_pct < 90 else "🔴"
-        return (
-            f"📊 *System Health Dashboard*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💻 *CPU Load:* {bar(cpu_pct)} {cpu_pct}%\n"
-            f"🧠 *RAM Usage:* {status_icon} {bar(used_pct)} {used_pct}%\n"
-            f"💾 *Disk I/O:* ✅ Stable (LiteCache Active)\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🤖 *AI State:* Senior Architect (Idle)\n"
-            f"📍 *Machine:* {COMPUTER_NAME}"
-        )
-    except: return "Error generating dashboard."
+        return (f"📊 *System Dashboard*\n"
+                f"💻 *CPU:* {bar(cpu_pct)} {cpu_pct}%\n"
+                f"🧠 *RAM:* {status_icon} {bar(used_pct)} {used_pct}%\n"
+                f"📍 *Node:* {COMPUTER_NAME}")
+    except: return "Error."
 
 def main():
-    print(f"[*] Telegram Gateway v4.4 (Visual Dashboard) on '{COMPUTER_NAME}'")
+    print(f"[*] Telegram Gateway v4.5 (Clean Chat) on '{COMPUTER_NAME}'")
     offset = 0
     while True:
         try:
@@ -72,16 +63,25 @@ def main():
                             branch = text.split(" ")[1].strip()
                             send_msg(chat_id, f"🚀 Deploying '{branch}'...")
                             subprocess.run(f"cd {REPO_DIR} && git checkout main && git merge origin/{branch} && ./install.sh", shell=True)
-                            send_msg(chat_id, "✅ Deployment Complete.")
-                        elif text.startswith("/all ") or text.startswith(f"/{COMPUTER_NAME.lower()} "):
-                            goal = text.split(" ", 1)[1]
-                            send_msg(chat_id, "⏳ Thinking...")
+                            send_msg(chat_id, "✅ Done.")
+                        elif text:
+                            # Natural Chat or Task
+                            # Filter slashes for /all or /[hostname]
+                            goal = text
+                            if text.startswith("/all "): goal = text.split(" ", 1)[1]
+                            elif text.startswith(f"/{COMPUTER_NAME.lower()} "): goal = text.split(" ", 1)[1]
+                            elif text.startswith("/"): continue # Ignore other commands
+                            
+                            # Clean response fetching
                             res = subprocess.run([os.path.expanduser("~/.local/bin/gagent"), goal], capture_output=True, text=True).stdout
-                            send_msg(chat_id, res[:3500])
-                        elif text and not text.startswith("/"):
-                            send_msg(chat_id, "🧠 Processing...")
-                            res = subprocess.run([os.path.expanduser("~/.local/bin/gagent"), text], capture_output=True, text=True).stdout
-                            send_msg(chat_id, res[:3500])
+                            # Extract ONLY the agent's response (lines after "Agent] >")
+                            if "[Agent] >" in res:
+                                clean_res = res.split("[Agent] >")[-1].strip()
+                            else:
+                                clean_res = res.strip()
+                            
+                            if clean_res:
+                                send_msg(chat_id, clean_res)
         except: pass
         time.sleep(1)
 
