@@ -24,6 +24,7 @@ SOUL_FILE = os.path.join(AGENT_ROOT, "core/SOUL.md")
 HEARTBEAT_FILE = os.path.join(AGENT_ROOT, "core/HEARTBEAT.md")
 CHAT_LOG = os.path.join(AGENT_ROOT, "logs/chat_history.jsonl")
 LOCAL_CONFIG = os.path.join(AGENT_ROOT, "core/local_config.json")
+SKILLS_DIR = os.path.join(AGENT_ROOT, "skills")
 
 # Threading Lock for DB
 db_lock = threading.Lock()
@@ -207,17 +208,47 @@ class GeminiMAS:
 
         status("[*] Planning...")
         sys_instr = self.get_system_context()
-        plan_raw = self.client_pro.generate(f"Goal: {user_goal}\nPast Context: {past}\nPlan 2-4 tasks. JSON format: [{{'id':1, 'task':'...'}}]", system_instruction=sys_instr, json_mode=True)
+        prompt = (f"Goal: {user_goal}\nPast Context: {past}\n"
+                  f"Plan 1-5 tasks. JSON format: [{{'id':1, 'task':'...', 'parallel': false}}].\n"
+                  f"- Set 'parallel': true to spawn multiple agent workers concurrently.\n"
+                  f"- To learn a new skill permanently, explicitly add a task to write a markdown file to {SKILLS_DIR}/your_skill_name.md using the write_file tool.")
+        plan_raw = self.client_pro.generate(prompt, system_instruction=sys_instr, json_mode=True)
         try: plan = json.loads(plan_raw.strip("`json \n"))
         except: return "Planning failed."
 
         results = {}
-        for step in plan:
-            status(f"\n[*] Executing Task {step['id']}...")
-            res = self.run_worker_with_tools(step['task'], str(results), sys_instr)
-            results[step['id']] = res
+        threads = []
+        q = queue.Queue()
+
+        def worker(step, sys_instr, results_so_far, q):
+            res = self.run_worker_with_tools(step['task'], str(results_so_far), sys_instr)
+            q.put((step['id'], res))
             with open(os.path.join(session_dir, f"task_{step['id']}.md"), 'w') as f: f.write(res)
-            status(" Done.")
+            status(f" Task {step['id']} Done.")
+
+        for step in plan:
+            is_parallel = step.get('parallel', False)
+            status(f"\n[*] Executing Task {step['id']} (Parallel: {is_parallel})...")
+            if is_parallel:
+                t = threading.Thread(target=worker, args=(step, sys_instr, dict(results), q))
+                t.start()
+                threads.append(t)
+            else:
+                for t in threads: t.join()
+                while not q.empty():
+                    tid, tres = q.get()
+                    results[tid] = tres
+                threads = []
+
+                worker(step, sys_instr, dict(results), q)
+                while not q.empty():
+                    tid, tres = q.get()
+                    results[tid] = tres
+
+        for t in threads: t.join()
+        while not q.empty():
+            tid, tres = q.get()
+            results[tid] = tres
 
         status(f"\n[*] Final Review...")
         final = self.client_lite.generate(f"Goal: {user_goal}\nResults: {json.dumps(results)}\nFormat final response for the user.", system_instruction=sys_instr)
