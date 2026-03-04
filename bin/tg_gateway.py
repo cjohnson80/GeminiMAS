@@ -1,3 +1,4 @@
+import signal, sys
 import json, os, urllib.request, time, subprocess, sys, socket
 AGENT_ROOT = os.path.expanduser("~/gemini_agents")
 REPO_DIR = os.path.expanduser("~/GeminiMAS_Repo")
