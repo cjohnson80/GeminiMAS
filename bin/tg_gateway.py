@@ -2,6 +2,7 @@ import json, os, urllib.request, time, subprocess, sys, socket
 AGENT_ROOT = os.path.expanduser("~/gemini_agents")
 ENV_FILE = os.path.join(AGENT_ROOT, ".env")
 REPO_DIR = os.path.expanduser("~/GeminiMAS_Repo")
+ENGINE_PATH = os.path.join(AGENT_ROOT, "bin/gemini_mas.py")
 
 def get_env(key):
     if not os.path.exists(ENV_FILE): return os.getenv(key)
@@ -13,15 +14,17 @@ def get_env(key):
 COMPUTER_NAME = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
 BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_ID = get_env("TELEGRAM_USER_ID")
+API_KEY = get_env("GEMINI_API_KEY")
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/"
 
 def send_msg(chat_id, text, markdown=False):
+    if not text or not text.strip(): return
     url = f"{BASE_URL}sendMessage"
     payload = {"chat_id": chat_id, "text": f"[{COMPUTER_NAME}] {text}"}
     if markdown: payload["parse_mode"] = "Markdown"
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
     try: urllib.request.urlopen(req)
-    except: pass
+    except Exception as e: print(f"Send Error: {e}")
 
 def get_dashboard():
     try:
@@ -33,7 +36,7 @@ def get_dashboard():
         load = os.getloadavg()[0]
         cpu_pct = int((load / os.cpu_count()) * 100)
         def bar(pct):
-            filled = int(pct / 10)
+            filled = min(10, int(pct / 10))
             return "[" + "█" * filled + "░" * (10 - filled) + "]"
         status_icon = "🟢" if used_pct < 70 else "🟠" if used_pct < 90 else "🔴"
         return (f"📊 *System Dashboard*\n"
@@ -43,7 +46,7 @@ def get_dashboard():
     except: return "Error."
 
 def main():
-    print(f"[*] Telegram Gateway v4.5 (Clean Chat) on '{COMPUTER_NAME}'")
+    print(f"[*] Telegram Gateway v4.6 (Robust Response) Active")
     offset = 0
     while True:
         try:
@@ -65,23 +68,30 @@ def main():
                             subprocess.run(f"cd {REPO_DIR} && git checkout main && git merge origin/{branch} && ./install.sh", shell=True)
                             send_msg(chat_id, "✅ Done.")
                         elif text:
-                            # Natural Chat or Task
-                            # Filter slashes for /all or /[hostname]
                             goal = text
                             if text.startswith("/all "): goal = text.split(" ", 1)[1]
                             elif text.startswith(f"/{COMPUTER_NAME.lower()} "): goal = text.split(" ", 1)[1]
-                            elif text.startswith("/"): continue # Ignore other commands
+                            elif text.startswith("/"): continue
                             
-                            # Clean response fetching
-                            res = subprocess.run([os.path.expanduser("~/.local/bin/gagent"), goal], capture_output=True, text=True).stdout
-                            # Extract ONLY the agent's response (lines after "Agent] >")
+                            # Execute Engine Directly
+                            env = os.environ.copy()
+                            env["GEMINI_API_KEY"] = API_KEY
+                            res = subprocess.run([sys.executable, ENGINE_PATH, goal], capture_output=True, text=True, env=env).stdout
+                            
+                            # Robust Parser
+                            clean_res = ""
                             if "[Agent] >" in res:
                                 clean_res = res.split("[Agent] >")[-1].strip()
-                            else:
-                                clean_res = res.strip()
+                            
+                            # Fallback: If clean_res is empty, send the whole thing but filter out logs
+                            if not clean_res:
+                                lines = [l for l in res.split('\n') if not l.startswith('[*]') and l.strip()]
+                                clean_res = "\n".join(lines)
                             
                             if clean_res:
                                 send_msg(chat_id, clean_res)
+                            else:
+                                send_msg(chat_id, "⚠️ Agent returned an empty response. Check server logs.")
         except: pass
         time.sleep(1)
 
