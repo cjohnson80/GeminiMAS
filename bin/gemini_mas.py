@@ -11,28 +11,11 @@ HEARTBEAT_FILE = os.path.join(AGENT_ROOT, "core/HEARTBEAT.md")
 RULES_FILE = os.path.join(AGENT_ROOT, "core/RULES.md")
 CHAT_LOG = os.path.join(AGENT_ROOT, "logs/chat_history.jsonl")
 SKILLS_DIR = os.path.join(AGENT_ROOT, "skills")
-ACTIVE_LOCK = os.path.join(AGENT_ROOT, "logs/active.lock")
 
 db_lock = threading.Lock()
 
 def status(msg): print(f"{msg}", end="", flush=True)
 def read_file_safe(path): return open(path, 'r').read() if os.path.exists(path) else ""
-
-class ActivityMonitor:
-    @staticmethod
-    def set_active():
-        with open(ACTIVE_LOCK, 'w') as f: f.write(str(time.time()))
-    @staticmethod
-    def clear_active():
-        if os.path.exists(ACTIVE_LOCK): os.remove(ACTIVE_LOCK)
-    @staticmethod
-    def is_busy():
-        if os.path.exists(ACTIVE_LOCK):
-            if time.time() - os.path.getmtime(ACTIVE_LOCK) < 3600: return True
-        try:
-            if os.getloadavg()[0] > 1.5: return True
-        except: pass
-        return False
 
 class ResourceGuard:
     @staticmethod
@@ -64,17 +47,18 @@ class ToolBox:
             elif action == "notify_telegram":
                 bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
                 chat_id = os.getenv("TELEGRAM_USER_ID")
-                if not bot_token or not chat_id: return "Error: Config missing."
+                if not bot_token or not chat_id: return "Telegram credentials missing in environment."
                 url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-                req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Status Update]\n{payload}"}).encode(), headers={"Content-Type": "application/json"})
+                req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Evolution Protocol]\n{payload}"}).encode(), headers={"Content-Type": "application/json"})
                 urllib.request.urlopen(req)
-                return "Notified user."
+                return "Telegram notification sent successfully to user."
             return "Unknown tool."
         except Exception as e: return f"Tool Error: {str(e)}"
 
 class GeminiClient:
     def __init__(self, api_key, model="gemini-3.1-flash-lite-preview"):
-        self.api_key, self.model = api_key, model.replace("models/", "")
+        self.api_key = api_key
+        self.model = model.replace("models/", "")
         self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/"
 
     def generate(self, prompt, system_instruction=None, json_mode=False, images=None, history=None):
@@ -93,6 +77,7 @@ class GeminiClient:
         payload = {"contents": contents, "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192}}
         if system_instruction: payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
         if json_mode: payload["generationConfig"]["responseMimeType"] = "application/json"
+
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=90) as response:
@@ -111,28 +96,17 @@ class Persistence:
     def __init__(self, api_key):
         self.client = GeminiClient(api_key)
         os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
-        con = self._get_con(read_only=False)
-        if con:
-            con.execute("CREATE TABLE IF NOT EXISTS memory (timestamp TIMESTAMP, goal TEXT, summary TEXT, embedding FLOAT[3072])")
-            con.close()
-    def _get_con(self, read_only=False):
-        for attempt in range(10):
-            try: return duckdb.connect(DB_FILE, read_only=read_only)
-            except: time.sleep(0.5)
-        return None
+        with db_lock:
+            self.con = duckdb.connect(DB_FILE)
+            self.con.execute("CREATE TABLE IF NOT EXISTS memory (timestamp TIMESTAMP, goal TEXT, summary TEXT, embedding FLOAT[3072])")
+
     def save_memory(self, goal, summary):
         if vec := self.client.embed(goal + " " + summary):
-            con = self._get_con(read_only=False)
-            if con:
-                con.execute("INSERT INTO memory VALUES (now(), ?, ?, ?)", [goal, summary, vec])
-                con.close()
+            with db_lock: self.con.execute("INSERT INTO memory VALUES (now(), ?, ?, ?)", [goal, summary, vec])
+
     def semantic_search(self, query, limit=3):
         if vec := self.client.embed(query):
-            con = self._get_con(read_only=True)
-            if con:
-                res = con.execute("SELECT goal, summary FROM memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[3072]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
-                con.close()
-                return res
+            with db_lock: return self.con.execute("SELECT goal, summary FROM memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[3072]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
         return []
 
 class GeminiMAS:
@@ -147,13 +121,14 @@ class GeminiMAS:
                 for l in f.readlines()[-6:]: self.history.append(json.loads(l))
 
     def triage(self, user_input):
-        prompt = f"Analyze: '{user_input}'. Is this CHAT or TASK? Reply ONLY 'CHAT' or 'TASK'."
+        prompt = f"Analyze: '{user_input}'. Is this a casual CHAT or a TASK that requires coding/tools/system changes? Reply ONLY 'CHAT' or 'TASK'."
         res = self.client_lite.generate(prompt)
         return res.strip().upper() if res else "CHAT"
 
     def run_worker_with_tools(self, task_desc, context, images, sys_instr):
-        sys_prompt = sys_instr + "\n\nYou are an executor. Tools: run_shell, fetch_url, read_file, write_file, notify_telegram. Reply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text."
+        sys_prompt = sys_instr + "\n\nYou are an executor. Tools available:\n1. run_shell (payload: command)\n2. fetch_url (payload: url)\n3. read_file (payload: path)\n4. write_file (payload: JSON string {'path':'...', 'content':'...'})\n5. notify_telegram (payload: message to send to user)\n\nReply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
         history = f"Context:\n{context}\nTask:\n{task_desc}"
+        
         for attempt in range(5):
             output = self.client_lite.generate(history, system_instruction=sys_prompt, images=images)
             if output and "{" in output and "'tool'" in output.replace('"', "'"):
@@ -165,6 +140,12 @@ class GeminiMAS:
                     history += f"\n\nTool Output:\n{tool_result}\nAnalyze this and continue."
                 except Exception as e: history += f"\n\nTool parse error: {str(e)}."
             else: return output
+                
+        status("\n[!] Stuck. Consulting Senior Debugger...")
+        advice = self.client_pro.generate(f"Worker is stuck.\nERRORS:\n{history}\nProvide actionable fix.")
+        if advice:
+            status(" Advice received.\n")
+            return self.client_lite.generate(history + f"\n\nADVICE:\n{advice}\nExecute task one last time.", system_instruction=sys_prompt, images=images)
         return "Task failed."
 
     def solve_task(self, user_goal):
@@ -173,52 +154,62 @@ class GeminiMAS:
         session_dir = os.path.join(WORKSPACE, timestamp)
         os.makedirs(session_dir, exist_ok=True)
         images = [os.path.join(session_dir, f) for f in os.listdir(session_dir) if f.endswith(('.png', '.jpg'))] if os.path.exists(session_dir) else []
+        
         status("[*] Planning...")
         sys_instr = f"IDENTITY:\n{read_file_safe(SOUL_FILE)}"
-        plan_raw = self.client_pro.generate(f"Goal: {user_goal}\nPast: {past}\nPlan tasks. JSON: [{{'id':1, 'task':'...'}}]", system_instruction=sys_instr, json_mode=True)
-        try:
-            plan = json.loads(plan_raw.strip("`json \n"))
-            results = {}
-            for step in plan:
-                status(f"\n[*] Executing {step['id']}...")
-                res = self.run_worker_with_tools(step['task'], str(results), images, sys_instr)
-                results[step['id']] = res
-                with open(os.path.join(session_dir, f"task_{step['id']}.md"), 'w') as f: f.write(res)
-                status(" Done.")
-            final = self.client_lite.generate(f"Goal: {user_goal}\nResults: {json.dumps(results)}\nFormat response.", system_instruction=sys_instr)
-            with open(os.path.join(session_dir, "final_response.md"), 'w') as f: f.write(final)
-            self.db.save_memory(user_goal, final[:1000])
-            return final
+        plan_raw = self.client_pro.generate(f"Goal: {user_goal}\nPast: {past}\nPlan 2-4 tasks. JSON format: [{{'id':1, 'task':'...'}}]", system_instruction=sys_instr, json_mode=True)
+        try: plan = json.loads(plan_raw.strip("`json \n"))
         except: return "Planning failed."
 
+        results = {}
+        for step in plan:
+            status(f"\n[*] Executing {step['id']}...")
+            res = self.run_worker_with_tools(step['task'], str(results), images, sys_instr)
+            results[step['id']] = res
+            with open(os.path.join(session_dir, f"task_{step['id']}.md"), 'w') as f: f.write(res)
+            status(" Done.")
+
+        status(f"\n[*] Reviewing...")
+        final = self.client_lite.generate(f"Goal: {user_goal}\nResults: {json.dumps(results)}\nFormat final response.", system_instruction=sys_instr)
+        with open(os.path.join(session_dir, "final_response.md"), 'w') as f: f.write(final)
+        self.db.save_memory(user_goal, final[:1000])
+        return final
+
     def process(self, user_input):
-        ActivityMonitor.set_active()
-        try:
-            if "TASK" in self.triage(user_input): response = self.solve_task(user_input)
-            else: response = self.client_lite.generate(user_input, system_instruction=read_file_safe(SOUL_FILE), history=self.history)
-            if response:
-                entry_user, entry_model = {"role": "user", "text": user_input}, {"role": "model", "text": response}
-                self.history.extend([entry_user, entry_model])
-                with open(CHAT_LOG, 'a') as f: f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
-            return response
-        finally: ActivityMonitor.clear_active()
+        if "TASK" in self.triage(user_input): response = self.solve_task(user_input)
+        else: response = self.client_lite.generate(user_input, system_instruction=read_file_safe(SOUL_FILE), history=self.history)
+        
+        if response:
+            entry_user = {"role": "user", "text": user_input}
+            entry_model = {"role": "model", "text": response}
+            self.history.extend([entry_user, entry_model])
+            with open(CHAT_LOG, 'a') as f:
+                f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
+        return response
 
 def heartbeat_daemon(api_key):
     mas = GeminiMAS(api_key)
-    hostname = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip().lower()
-    print(f"\n[!] Heartbeat Daemon Started (Machine: {hostname})")
+    print("\n[!] Heartbeat Daemon Started (Evolution Mode Active)")
     while True:
         try:
-            if ActivityMonitor.is_busy():
-                print(f"[Pulse] {datetime.now()} - System busy. Delaying evolution.")
-                time.sleep(1800)
+            print(f"\n[Pulse] {datetime.now()} - Checking for Evolution...")
+            # Trigger the evolution protocol directly
+            mas.process(f"Execute the EVOLUTION PROTOCOL from this file: {HEARTBEAT_FILE}")
+            time.sleep(21600) # Run every 6 hours
+        except KeyboardInterrupt: break
+
+def interactive_loop(api_key):
+    mas = GeminiMAS(api_key)
+    print("\n" + "="*50 + "\nGeminiMAS v8.0 (Evolution Shell)\n" + "="*50)
+    while True:
+        try:
+            inp = input("\n[You] > ").strip()
+            if inp.lower() in ['exit', 'quit']: break
+            if inp.lower() == 'heartbeat': 
+                heartbeat_daemon(api_key)
                 continue
-            print(f"\n[Pulse] {datetime.now()} - System idle. Starting Evolution...")
-            evo_prompt = (f"You are the machine '{hostname}'. System is idle. Execute the EVOLUTION PROTOCOL. "
-                          f"1. Create branch: 'evolution-{hostname}'. 2. Code new feature. 3. Push to GitHub. "
-                          f"4. Notify user via Telegram to /approve evolution-{hostname}.")
-            mas.process(evo_prompt)
-            time.sleep(21600)
+            if not inp: continue
+            print(f"\n[Agent] > {mas.process(inp)}")
         except KeyboardInterrupt: break
 
 if __name__ == "__main__":
@@ -226,14 +217,6 @@ if __name__ == "__main__":
     if not key: sys.exit(1)
     if len(sys.argv) > 1:
         if sys.argv[1] == "heartbeat": heartbeat_daemon(key)
-        else: print("\n" + GeminiMAS(key).process(" ".join(sys.argv[1:])))
+        else: print("\n" + mas.process(" ".join(sys.argv[1:])))
     else:
-        mas = GeminiMAS(key)
-        print("\nGeminiMAS v8.3 Shell\n" + "="*30)
-        while True:
-            try:
-                inp = input("\n[You] > ").strip()
-                if inp.lower() in ['exit', 'quit']: break
-                if inp: print(f"\n[Agent] > {mas.process(inp)}")
-            except KeyboardInterrupt: break
-EOF
+        interactive_loop(key)
