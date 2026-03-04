@@ -159,8 +159,9 @@ class GeminiClient:
         self.model = model.replace("models/", "")
         self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/"
 
-    def generate(self, prompt, system_instruction=None, json_mode=False, history=None, images=None):
-        url = f"{self.base_url}{self.model}:generateContent?key={self.api_key}"
+    def generate(self, prompt, system_instruction=None, json_mode=False, history=None, stream=False, images=None):
+        method = "streamGenerateContent" if stream else "generateContent"
+        url = f"{self.base_url}{self.model}:{method}?key={self.api_key}"
         contents = []
         if history:
             for h in history: contents.append({"role": h["role"], "parts": [{"text": h["text"]}]})
@@ -184,52 +185,31 @@ class GeminiClient:
 
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                    headers={"Content-Type": "application/json"}, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=120) as response:
-                result = json.loads(response.read().decode("utf-8"))
-                return result['candidates'][0]['content']['parts'][0]['text']
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8")
-            return f"API Error {e.code}: {err_body}"
-        except Exception as e:
-            return f"Error: {str(e)}"
 
-    def generate_stream(self, prompt, system_instruction=None, history=None, images=None):
-        url = f"{self.base_url}{self.model}:streamGenerateContent?key={self.api_key}"
-        contents = []
-        if history:
-            for h in history: contents.append({"role": h["role"], "parts": [{"text": h["text"]}]})
+        def _gen():
+            try:
+                with urllib.request.urlopen(req, timeout=120) as response:
+                    if stream:
+                        raw_data = response.read().decode("utf-8")
+                        chunks = json.loads(raw_data)
+                        for chunk in chunks:
+                            yield chunk['candidates'][0]['content']['parts'][0]['text']
+                    else:
+                        result = json.loads(response.read().decode("utf-8"))
+                        yield result['candidates'][0]['content']['parts'][0]['text']
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8")
+                yield f"API Error {e.code}: {err_body}"
+            except Exception as e:
+                yield f"Error: {str(e)}"
 
-        parts = [{"text": prompt}]
-        if images:
-            for img_path in images:
-                if os.path.exists(img_path):
-                    mime, _ = mimetypes.guess_type(img_path)
-                    with open(img_path, "rb") as f:
-                        data = base64.b64encode(f.read()).decode("utf-8")
-                    parts.append({"inlineData": {"mimeType": mime or "image/jpeg", "data": data}})
-
-        contents.append({"role": "user", "parts": parts})
-        payload = {
-            "contents": contents,
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192}
-        }
-        if system_instruction: payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
-                                   headers={"Content-Type": "application/json"}, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=120) as response:
-                raw_data = response.read().decode("utf-8")
-                chunks = json.loads(raw_data)
-                for chunk in chunks:
-                    yield chunk['candidates'][0]['content']['parts'][0]['text']
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8")
-            yield f"API Error {e.code}: {err_body}"
-        except Exception as e:
-            yield f"Error: {str(e)}"
-
+        if stream:
+            return _gen()
+        else:
+            try:
+                return next(_gen())
+            except StopIteration:
+                return "Error: Empty response"
 
     def embed(self, text):
         url = f"{self.base_url}gemini-embedding-001:embedContent?key={self.api_key}"
@@ -319,7 +299,10 @@ class GeminiMAS:
     def triage(self, user_input):
         prompt = f"Analyze: '{user_input}'. Is this a casual CHAT or a TASK that requires coding/tools/system changes? Reply ONLY 'CHAT' or 'TASK'."
         res = self.client_lite.generate(prompt)
-        return res.strip().upper() if res else "CHAT"
+        if not res: return "CHAT"
+        res_upper = res.strip().upper()
+        if "TASK" in res_upper: return "TASK"
+        return "CHAT"
 
     def run_worker_with_tools(self, task_desc, context, sys_instr, role="Developer", images=None):
         # Role-specific system instruction
@@ -433,7 +416,7 @@ class GeminiMAS:
         else:
             if stream:
                 full_resp = ""
-                for chunk in self.client_lite.generate_stream(user_input, system_instruction=sys_instr, history=self.history, images=images):
+                for chunk in self.client_lite.generate(user_input, system_instruction=sys_instr, history=self.history, stream=True, images=images):
                     full_resp += chunk
                     yield chunk
 
