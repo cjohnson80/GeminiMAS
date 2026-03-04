@@ -182,9 +182,16 @@ class GeminiMAS:
         res = self.client_lite.generate(prompt)
         return res.strip().upper() if res else "CHAT"
 
-    def run_worker_with_tools(self, task_desc, context, sys_instr):
-        sys_prompt = sys_instr + "\n\nYou are an executor. Tools available:\n1. run_shell (payload: command)\n2. fetch_url (payload: url)\n3. read_file (payload: path)\n4. write_file (payload: JSON string {'path':'...', 'content':'...'})\n5. notify_telegram (payload: message to send to user)\n\nReply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
-        history = f"Context:\n{context}\nTask:\n{task_desc}"
+    def run_worker_with_tools(self, task_desc, context, sys_instr, role="Developer"):
+        # Role-specific system instruction
+        role_prompt = f"{sys_instr}\n\nYOUR_ROLE: {role}\n"
+        if role == "Architect":
+            role_prompt += "Focus on directory structure, scalability, and defining interfaces.\n"
+        elif role == "Reviewer":
+            role_prompt += "Focus on code quality, security, TypeScript strictness, and Next.js best practices.\n"
+
+        sys_prompt = role_prompt + "\n\nYou are an executor. Tools available:\n1. run_shell (payload: command)\n2. fetch_url (payload: url)\n3. read_file (payload: path)\n4. write_file (payload: JSON string {'path':'...', 'content':'...'})\n5. notify_telegram (payload: message to send to user)\n\nReply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
+        history = f"Context from previous tasks:\n{context}\n\nTask to complete as {role}:\n{task_desc}"
 
         for attempt in range(5):
             output = self.client_lite.generate(history, system_instruction=sys_prompt)
@@ -192,13 +199,13 @@ class GeminiMAS:
                 try:
                     block = output[output.find("{"):output.rfind("}")+1]
                     cmd = json.loads(block)
-                    status(f" [{cmd['tool']}]...")
+                    status(f" [{role}:{cmd['tool']}]...")
                     tool_result = ToolBox.execute(cmd['tool'], cmd['payload'])
                     history += f"\n\nTool Output:\n{tool_result}\nAnalyze this and continue."
                 except Exception as e: history += f"\n\nTool parse error: {str(e)}."
             else: return output
 
-        return self.client_pro.generate(history + "\n\nSummarize the final outcome of this task.", system_instruction=sys_instr)
+        return self.client_pro.generate(history + f"\n\n[Role: {role}] Summarize the final outcome.", system_instruction=sys_instr)
 
     def solve_task(self, user_goal):
         past = self.db.semantic_search(user_goal)
@@ -206,12 +213,20 @@ class GeminiMAS:
         session_dir = os.path.join(WORKSPACE, timestamp)
         os.makedirs(session_dir, exist_ok=True)
 
-        status("[*] Planning...")
+        # Shared context file for agents to collaborate
+        scratchpad_path = os.path.join(session_dir, "PROJECT_SUMMARY.md")
+        with open(scratchpad_path, "w") as f:
+            f.write(f"# Project Scratchpad\n\nGoal: {user_goal}\n\n## Structure\n(To be defined by Architect)\n")
+
+        status("[*] Collaborative Planning...")
         sys_instr = self.get_system_context()
         prompt = (f"Goal: {user_goal}\nPast Context: {past}\n"
-                  f"Plan 1-5 tasks. JSON format: [{{'id':1, 'task':'...', 'parallel': false}}].\n"
-                  f"- Set 'parallel': true to spawn multiple agent workers concurrently.\n"
-                  f"- To learn a new skill permanently, explicitly add a task to write a markdown file to {SKILLS_DIR}/your_skill_name.md using the write_file tool.")
+                  f"Plan 1-6 tasks using specialized agents. JSON format: [{{'id':1, 'role':'Architect|Developer|Reviewer', 'task':'...', 'parallel': false}}].\n"
+                  f"- Use an Architect first to define structure in {scratchpad_path}.\n"
+                  f"- Use Developers for implementation.\n"
+                  f"- Use Reviewers to verify critical code.\n"
+                  f"- Set 'parallel': true only for independent tasks.")
+
         plan_raw = self.client_pro.generate(prompt, system_instruction=sys_instr, json_mode=True)
         try: plan = json.loads(plan_raw.strip("`json \n"))
         except: return "Planning failed."
@@ -221,14 +236,17 @@ class GeminiMAS:
         q = queue.Queue()
 
         def worker(step, sys_instr, results_so_far, q):
-            res = self.run_worker_with_tools(step['task'], str(results_so_far), sys_instr)
+            role = step.get('role', 'Developer')
+            res = self.run_worker_with_tools(step['task'], str(results_so_far), sys_instr, role=role)
             q.put((step['id'], res))
-            with open(os.path.join(session_dir, f"task_{step['id']}.md"), 'w') as f: f.write(res)
-            status(f" Task {step['id']} Done.")
+            with open(os.path.join(session_dir, f"task_{step['id']}_{role}.md"), 'w') as f: f.write(res)
+            status(f" Task {step['id']} ({role}) Done.")
 
         for step in plan:
             is_parallel = step.get('parallel', False)
-            status(f"\n[*] Executing Task {step['id']} (Parallel: {is_parallel})...")
+            role = step.get('role', 'Developer')
+            status(f"\n[*] Spawning {role} for Task {step['id']} (Parallel: {is_parallel})...")
+
             if is_parallel:
                 t = threading.Thread(target=worker, args=(step, sys_instr, dict(results), q))
                 t.start()
@@ -236,22 +254,19 @@ class GeminiMAS:
             else:
                 for t in threads: t.join()
                 while not q.empty():
-                    tid, tres = q.get()
-                    results[tid] = tres
+                    tid, tres = q.get(); results[tid] = tres
                 threads = []
 
                 worker(step, sys_instr, dict(results), q)
                 while not q.empty():
-                    tid, tres = q.get()
-                    results[tid] = tres
+                    tid, tres = q.get(); results[tid] = tres
 
         for t in threads: t.join()
         while not q.empty():
-            tid, tres = q.get()
-            results[tid] = tres
+            tid, tres = q.get(); results[tid] = tres
 
         status(f"\n[*] Final Review...")
-        final = self.client_lite.generate(f"Goal: {user_goal}\nResults: {json.dumps(results)}\nFormat final response for the user.", system_instruction=sys_instr)
+        final = self.client_lite.generate(f"Goal: {user_goal}\nResults: {json.dumps(results)}\nFormat final summary.", system_instruction=sys_instr)
         with open(os.path.join(session_dir, "final_response.md"), 'w') as f: f.write(final)
         self.db.save_memory(user_goal, final[:1000])
         return final
