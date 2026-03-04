@@ -106,6 +106,7 @@ cat << 'EOF' > "$AGENT_ROOT/core/HEARTBEAT.md"
 EOF
 
 # --- 6. Install Binaries ---
+mkdir -p "$HOME/.local/bin"
 smart_run "cp \"$REPO_ROOT/bin/gemini_mas.py\" \"$AGENT_ROOT/bin/gemini_mas.py\"" "Copying Core Engine"
 smart_run "chmod +x \"$AGENT_ROOT/bin/gemini_mas.py\"" "Setting permissions for Core Engine"
 
@@ -129,7 +130,26 @@ fi
 EOF
 chmod +x "$HOME/.local/bin/gagent"
 
-# --- 7. Systemd Services ---
+# --- 7. PATH Setup ---
+SHELL_RC=""
+if [ -n "$BASH_VERSION" ]; then
+    SHELL_RC="$HOME/.bashrc"
+elif [ -n "$ZSH_VERSION" ]; then
+    SHELL_RC="$HOME/.zshrc"
+else
+    # Fallback to .bashrc if shell is unknown but bash is present
+    if [ -f "$HOME/.bashrc" ]; then SHELL_RC="$HOME/.bashrc"; fi
+fi
+
+if [ -n "$SHELL_RC" ]; then
+    if ! grep -q "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$SHELL_RC"; then
+        echo "[*] Adding ~/.local/bin to PATH in $SHELL_RC..."
+        echo -e "\n# GeminiMAS PATH\nexport PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$SHELL_RC"
+        echo "[!] PATH updated. Please run 'source $SHELL_RC' to apply changes."
+    fi
+fi
+
+# --- 8. Systemd Services ---
 SERVICE_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SERVICE_DIR"
 
@@ -181,4 +201,5 @@ echo "[*] GeminiMAS v8.0 Installed Successfully."
 echo "[*] Binary location: $AGENT_ROOT/bin"
 echo "[*] Venv location: $AGENT_ROOT/venv"
 echo "[*] Config location: $AGENT_ROOT/.env"
+echo "[*] Wrapper location: $HOME/.local/bin/gagent"
 echo "==============================================="
