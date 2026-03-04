@@ -99,12 +99,17 @@ EOF
 echo "[*] Writing Heartbeat file..."
 cat << 'EOF' > "$AGENT_ROOT/core/HEARTBEAT.md"
 # Active Goals
-- [ ] **EVOLUTION PROTOCOL:** Examine your source code in \`$REPO_ROOT/bin/\`. Invent a new lightweight feature or optimization.
+- [ ] **EVOLUTION PROTOCOL (GLOBAL):** Examine your source code in \`$REPO_ROOT/bin/\`. Invent a new lightweight feature or optimization for ALL machines.
       1. Use \`run_shell\` to \`cd $REPO_ROOT\`.
       2. Create a unique branch based on your machine name: \`git checkout -b evolution-$CURRENT_MACHINE-$(date +%s)\`.
-      3. Implement the feature in the code and update the \`README.md\` (if applicable).
-      4. Use \`run_shell\` to \`git add .\`, \`git commit -m \"Auto-Upgrade: [Feature Description]\"\`, and \`git push origin HEAD\`.
-      5. Use the \`notify_telegram\` tool to send a summary of the upgrade to the user, strictly instructing them to reply with \`/approve [branch_name]\` to merge your changes into main.
+      3. Implement the feature and update \`README.md\`.
+      4. Use \`run_shell\` to \`git add .\`, \`git commit -m \"Global Optimization: [Feature Description]\"\`, and \`git push origin HEAD\`.
+      5. Notify the user via Telegram and ask them to reply with \`/approve [branch_name]\`.
+
+- [ ] **EVOLUTION PROTOCOL (LOCAL):** Optimize your performance for this specific machine (\`$CURRENT_MACHINE\`).
+      1. Analyze your resource usage and \`LOCAL_HARDWARE_CONFIG\`.
+      2. If you need to tune performance (e.g., reduce threads, adjust cache), write the new config directly to \`$AGENT_ROOT/core/local_config.json\`.
+      3. These changes remain private and local to this machine.
 EOF
 
 # --- 6. Install Binaries ---

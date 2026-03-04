@@ -23,9 +23,20 @@ DB_FILE = os.path.join(AGENT_ROOT, "memory/memory.db")
 SOUL_FILE = os.path.join(AGENT_ROOT, "core/SOUL.md")
 HEARTBEAT_FILE = os.path.join(AGENT_ROOT, "core/HEARTBEAT.md")
 CHAT_LOG = os.path.join(AGENT_ROOT, "logs/chat_history.jsonl")
+LOCAL_CONFIG = os.path.join(AGENT_ROOT, "core/local_config.json")
 
 # Threading Lock for DB
 db_lock = threading.Lock()
+
+def read_local_config():
+    if not os.path.exists(LOCAL_CONFIG):
+        return {"max_threads": 2, "cache_size": "512MB", "model_overrides": {}}
+    with open(LOCAL_CONFIG, 'r') as f:
+        return json.load(f)
+
+def write_local_config(config):
+    with open(LOCAL_CONFIG, 'w') as f:
+        json.dump(config, f, indent=4)
 
 def status(msg):
     print(f"{msg}", end="", flush=True)
@@ -151,7 +162,8 @@ class GeminiMAS:
 
     def get_system_context(self):
         soul = read_file_safe(SOUL_FILE)
-        return f"{soul}\n\nCURRENT_MACHINE: {self.machine_name}\n"
+        local_cfg = read_local_config()
+        return f"{soul}\n\nCURRENT_MACHINE: {self.machine_name}\nLOCAL_HARDWARE_CONFIG: {json.dumps(local_cfg)}\n"
 
     def triage(self, user_input):
         prompt = f"Analyze: '{user_input}'. Is this a casual CHAT or a TASK that requires coding/tools/system changes? Reply ONLY 'CHAT' or 'TASK'."

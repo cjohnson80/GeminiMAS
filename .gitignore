@@ -1,6 +1,7 @@
 # Ignore local keys and keys files
 .env
 *.env
+core/local_config.json
 
 # Ignore workspace and database data
 workspace/
