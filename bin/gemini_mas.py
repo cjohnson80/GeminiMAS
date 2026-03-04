@@ -62,8 +62,21 @@ class ToolBox:
     def execute(action, payload):
         try:
             if action == "run_shell":
-                res = subprocess.run(payload, shell=True, capture_output=True, text=True, timeout=60)
+                res = subprocess.run(payload, shell=True, capture_output=True, text=True, timeout=120)
                 return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+            elif action == "verify_project":
+                # Superior Intelligent Tool: Actually check the code for errors
+                status(f" [Verifying Code]...")
+                checks = [
+                    ("Linting", "npm run lint"),
+                    ("TypeScript", "npx tsc --noEmit")
+                ]
+                results = []
+                for name, cmd in checks:
+                    res = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=payload)
+                    if res.returncode != 0:
+                        results.append(f"{name} Failed:\n{res.stderr[:1000]}")
+                return "Project is clean!" if not results else "\n".join(results)
             elif action == "fetch_url":
                 req = urllib.request.Request(payload, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=15) as response:
@@ -95,8 +108,10 @@ class GeminiClient:
         self.model = model.replace("models/", "")
         self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/"
 
-    def generate(self, prompt, system_instruction=None, json_mode=False, history=None):
-        url = f"{self.base_url}{self.model}:generateContent?key={self.api_key}"
+    def generate(self, prompt, system_instruction=None, json_mode=False, history=None, stream=False):
+        method = "streamGenerateContent" if stream else "generateContent"
+        url = f"{self.base_url}{self.model}:{method}?key={self.api_key}"
+
         contents = []
         if history:
             for h in history: contents.append({"role": h["role"], "parts": [{"text": h["text"]}]})
@@ -113,10 +128,21 @@ class GeminiClient:
                                    headers={"Content-Type": "application/json"}, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=120) as response:
-                result = json.loads(response.read().decode("utf-8"))
-                return result['candidates'][0]['content']['parts'][0]['text']
+                if stream:
+                    full_text = ""
+                    # Gemini streaming returns a list of JSON objects
+                    raw_data = response.read().decode("utf-8")
+                    chunks = json.loads(raw_data)
+                    for chunk in chunks:
+                        text = chunk['candidates'][0]['content']['parts'][0]['text']
+                        yield text
+                else:
+                    result = json.loads(response.read().decode("utf-8"))
+                    return result['candidates'][0]['content']['parts'][0]['text']
         except Exception as e:
-            return f"Error: {str(e)}"
+            err_msg = f"Error: {str(e)}"
+            if stream: yield err_msg
+            else: return err_msg
 
     def embed(self, text):
         url = f"{self.base_url}gemini-embedding-001:embedContent?key={self.api_key}"
@@ -128,7 +154,6 @@ class GeminiClient:
                 result = json.loads(response.read().decode("utf-8"))
                 return result['embedding']['values']
         except: return None
-
 class Persistence:
     def __init__(self, api_key):
         self.client = GeminiClient(api_key)
@@ -190,7 +215,7 @@ class GeminiMAS:
         elif role == "Reviewer":
             role_prompt += "Focus on code quality, security, TypeScript strictness, and Next.js best practices.\n"
 
-        sys_prompt = role_prompt + "\n\nYou are an executor. Tools available:\n1. run_shell (payload: command)\n2. fetch_url (payload: url)\n3. read_file (payload: path)\n4. write_file (payload: JSON string {'path':'...', 'content':'...'})\n5. notify_telegram (payload: message to send to user)\n\nReply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
+        sys_prompt = role_prompt + "\n\nYou are an executor. Tools available:\n1. run_shell (payload: command)\n2. verify_project (payload: project_path) - Runs lint/tsc to ensure code quality.\n3. fetch_url (payload: url)\n4. read_file (payload: path)\n5. write_file (payload: JSON string {'path':'...', 'content':'...'})\n6. notify_telegram (payload: message to send to user)\n\nReply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
         history = f"Context from previous tasks:\n{context}\n\nTask to complete as {role}:\n{task_desc}"
 
         for attempt in range(5):
@@ -201,13 +226,19 @@ class GeminiMAS:
                     cmd = json.loads(block)
                     status(f" [{role}:{cmd['tool']}]...")
                     tool_result = ToolBox.execute(cmd['tool'], cmd['payload'])
+                    # Smart Context Management: If output is huge, summarize it
+                    if len(tool_result) > 2000:
+                        status(" [Summarizing Large Output]...")
+                        tool_result = self.client_lite.generate(f"Summarize this tool output for an agent: {tool_result[:8000]}")
+
                     history += f"\n\nTool Output:\n{tool_result}\nAnalyze this and continue."
                 except Exception as e: history += f"\n\nTool parse error: {str(e)}."
             else: return output
 
         status(f"\n[!] {role} Stuck. Consulting Senior Debugger...")
-        advice = self.client_pro.generate(f"Worker Role: {role} is stuck.\nDEBUG CONTEXT:\n{history}\n\nProvide an actionable fix or workaround.", system_instruction="You are a Senior Debugger. Help the worker get unstuck.")
-
+        # Context Compression for Senior Debugger
+        brief_history = self.client_lite.generate(f"Summarize the attempts and failures so far to help a senior debugger: {history[-10000:]}")
+        advice = self.client_pro.generate(f"Worker Role: {role} is stuck.\nDEBUG BRIEF:\n{brief_history}\n\nProvide an actionable fix or workaround.", system_instruction="You are a Senior Debugger. Help the worker get unstuck.")
         if advice:
             status(" Advice received. Executing final attempt...")
             final_history = history + f"\n\nSENIOR_DEBUGGER_ADVICE: {advice}\nExecute the task one last time using this advice."
@@ -279,20 +310,36 @@ class GeminiMAS:
         self.db.save_memory(user_goal, final[:1000])
         return final
 
-    def process(self, user_input):
+    def process(self, user_input, stream=False):
         sys_instr = self.get_system_context()
         if "TASK" in self.triage(user_input):
             response = self.solve_task(user_input)
+            if stream: yield response
+            else: return response
         else:
-            response = self.client_lite.generate(user_input, system_instruction=sys_instr, history=self.history)
-        if response:
-            entry_user = {"role": "user", "text": user_input}
-            entry_model = {"role": "model", "text": response}
-            self.history.extend([entry_user, entry_model])
-            os.makedirs(os.path.dirname(CHAT_LOG), exist_ok=True)
-            with open(CHAT_LOG, 'a') as f:
-                f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
-        return response
+            if stream:
+                full_resp = ""
+                for chunk in self.client_lite.generate(user_input, system_instruction=sys_instr, history=self.history, stream=True):
+                    full_resp += chunk
+                    yield chunk
+
+                if full_resp:
+                    entry_user = {"role": "user", "text": user_input}
+                    entry_model = {"role": "model", "text": full_resp}
+                    self.history.extend([entry_user, entry_model])
+                    os.makedirs(os.path.dirname(CHAT_LOG), exist_ok=True)
+                    with open(CHAT_LOG, 'a') as f:
+                        f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
+            else:
+                response = self.client_lite.generate(user_input, system_instruction=sys_instr, history=self.history)
+                if response:
+                    entry_user = {"role": "user", "text": user_input}
+                    entry_model = {"role": "model", "text": response}
+                    self.history.extend([entry_user, entry_model])
+                    os.makedirs(os.path.dirname(CHAT_LOG), exist_ok=True)
+                    with open(CHAT_LOG, 'a') as f:
+                        f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
+                return response
 
 def heartbeat_daemon(api_key):
     mas = GeminiMAS(api_key)
@@ -302,7 +349,8 @@ def heartbeat_daemon(api_key):
             hb_list = read_file_safe(HEARTBEAT_FILE)
             if "[ ]" in hb_list:
                 print(f"\n[Pulse] {datetime.now()} - Processing Evolution Tasks...")
-                mas.process(f"Execute the pending tasks in {HEARTBEAT_FILE}")
+                # Consume the generator
+                for _ in mas.process(f"Execute the pending tasks in {HEARTBEAT_FILE}", stream=True): pass
             time.sleep(3600) # Check every hour
         except KeyboardInterrupt: break
         except Exception as e:
@@ -318,7 +366,11 @@ def interactive_loop(api_key):
             if inp.lower() in ['exit', 'quit']: break
             if inp.lower() == 'heartbeat': heartbeat_daemon(api_key); continue
             if not inp: continue
-            print(f"\n[Agent] > {mas.process(inp)}")
+
+            print("\n[Agent] > ", end="", flush=True)
+            for chunk in mas.process(inp, stream=True):
+                print(chunk, end="", flush=True)
+            print("\n")
         except KeyboardInterrupt: break
 
 if __name__ == "__main__":

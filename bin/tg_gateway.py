@@ -62,21 +62,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text
     mas_path = os.path.expanduser('~/gemini_agents/bin/gemini_mas.py')
 
+    # Send initial status message
+    status_msg = await update.message.reply_text("Thinking...")
+
     async with semaphore:
         try:
-            # Use sys.executable to ensure we use the same venv python
+            # Run the core engine
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, mas_path, '--prompt', user_input,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
-            response = stdout.decode().strip() or f"Error: {stderr.decode()}"
-            await update.message.reply_text(response[:4096])
-        except asyncio.TimeoutError:
-            await update.message.reply_text("Gateway Timeout: Hardware resource limit reached.")
-        except Exception as e:
-            await update.message.reply_text(f"Gateway Error: {str(e)}")
 
+            # Since we don't have true streaming from subprocess yet,
+            # we'll poll the output or just wait.
+            # For now, let's keep it simple but improve the response handling.
+
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+            response = stdout.decode().strip() or f"Error: {stderr.decode()}"
+
+            if response:
+                await status_msg.edit_text(response[:4096])
+            else:
+                await status_msg.edit_text("No response received.")
+
+        except asyncio.TimeoutError:
+            await status_msg.edit_text("Gateway Timeout: Hardware resource limit reached.")
+        except Exception as e:
+            await status_msg.edit_text(f"Gateway Error: {str(e)}")
 if __name__ == '__main__':
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not token:
