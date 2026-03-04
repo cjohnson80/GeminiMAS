@@ -120,7 +120,13 @@ smart_run "chmod +x \"$AGENT_ROOT/bin/gemini_mas.py\"" "Setting permissions for 
 smart_run "cp \"$REPO_ROOT/bin/tg_gateway.py\" \"$AGENT_ROOT/bin/tg_gateway.py\"" "Copying Telegram Gateway"
 smart_run "chmod +x \"$AGENT_ROOT/bin/tg_gateway.py\"" "Setting permissions for Telegram Gateway"
 
-# Global Wrapper
+# --- 7. Skills Synchronization ---
+if [ -d "$REPO_ROOT/skills" ]; then
+    echo "[*] Syncing Skills..."
+    cp -r "$REPO_ROOT/skills/"* "$AGENT_ROOT/skills/"
+fi
+
+# --- 8. Global Wrapper ---
 echo "[*] Creating global gagent wrapper..."
 cat << 'EOF' > "$HOME/.local/bin/gagent"
 #!/bin/bash

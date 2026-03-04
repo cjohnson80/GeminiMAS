@@ -131,7 +131,9 @@ class GeminiClient:
 class Persistence:
     def __init__(self, api_key):
         self.client = GeminiClient(api_key)
+        self.skills_dir = SKILLS_DIR
         os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+        os.makedirs(self.skills_dir, exist_ok=True)
         with db_lock:
             self.con = duckdb.connect(DB_FILE)
             self.con.execute("CREATE TABLE IF NOT EXISTS memory (timestamp TIMESTAMP, goal TEXT, summary TEXT, embedding FLOAT[768])")
@@ -141,10 +143,19 @@ class Persistence:
             with db_lock: self.con.execute("INSERT INTO memory VALUES (now(), ?, ?, ?)", [goal, summary, vec])
 
     def semantic_search(self, query, limit=3):
+        results = []
         if vec := self.client.embed(query):
             with db_lock:
-                return self.con.execute("SELECT goal, summary FROM memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[768]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
-        return []
+                results = self.con.execute("SELECT goal, summary FROM memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[768]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
+
+        # Skill Injection: Search the skills directory for relevant MD files
+        skills_found = []
+        if os.path.exists(SKILLS_DIR):
+            for f in os.listdir(SKILLS_DIR):
+                if f.endswith(".md") and any(word in f.lower() for word in query.lower().split()):
+                    skills_found.append({"goal": f"Skill: {f}", "summary": read_file_safe(os.path.join(SKILLS_DIR, f))[:2000]})
+
+        return results + skills_found
 
 class GeminiMAS:
     def __init__(self, api_key):
