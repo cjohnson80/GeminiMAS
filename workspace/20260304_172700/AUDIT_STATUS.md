@@ -1,0 +1,1 @@
+CRITICAL: Environment lacks Node.js/npm. Next.js scaffolding aborted to preserve system stability on Celeron hardware. Current architecture state: Verified. Git branch: feature/recursion-heartbeat maintained.

@@ -1,0 +1,6 @@
+{
+  "max_threads": 2,
+  "cache_size": "512MB",
+  "model_overrides": {},
+  "disabled_features": ["telemetry_verbose", "background_indexing"]
+}
