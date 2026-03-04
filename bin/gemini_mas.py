@@ -135,19 +135,30 @@ class GeminiClient:
         self.model = model.replace("models/", "")
         self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/"
 
-    def generate(self, prompt, system_instruction=None, json_mode=False, history=None, stream=False):
+    def generate(self, prompt, system_instruction=None, json_mode=False, history=None, stream=False, images=None):
         method = "streamGenerateContent" if stream else "generateContent"
         url = f"{self.base_url}{self.model}:{method}?key={self.api_key}"
 
         contents = []
         if history:
             for h in history: contents.append({"role": h["role"], "parts": [{"text": h["text"]}]})
-        contents.append({"role": "user", "parts": [{"text": prompt}]})
+
+        parts = [{"text": prompt}]
+        if images:
+            for img_path in images:
+                if os.path.exists(img_path):
+                    mime, _ = mimetypes.guess_type(img_path)
+                    with open(img_path, "rb") as f:
+                        data = base64.b64encode(f.read()).decode("utf-8")
+                    parts.append({"inlineData": {"mimeType": mime or "image/jpeg", "data": data}})
+
+        contents.append({"role": "user", "parts": parts})
 
         payload = {
             "contents": contents,
             "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192}
         }
+
         if system_instruction: payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
         if json_mode: payload["generationConfig"]["responseMimeType"] = "application/json"
 
@@ -234,7 +245,7 @@ class GeminiMAS:
         res = self.client_lite.generate(prompt)
         return res.strip().upper() if res else "CHAT"
 
-    def run_worker_with_tools(self, task_desc, context, sys_instr, role="Developer"):
+    def run_worker_with_tools(self, task_desc, context, sys_instr, role="Developer", images=None):
         # Role-specific system instruction
         role_prompt = f"{sys_instr}\n\nYOUR_ROLE: {role}\n"
         if role == "Architect":
@@ -246,7 +257,7 @@ class GeminiMAS:
         history = f"Context from previous tasks:\n{context}\n\nTask to complete as {role}:\n{task_desc}"
 
         for attempt in range(5):
-            output = self.client_lite.generate(history, system_instruction=sys_prompt)
+            output = self.client_lite.generate(history, system_instruction=sys_prompt, images=images)
             if output and "{" in output and ("'tool'" in output.replace('"', "'") or '"tool"' in output):
                 try:
                     block = output[output.find("{"):output.rfind("}")+1]
@@ -269,11 +280,11 @@ class GeminiMAS:
         if advice:
             status(" Advice received. Executing final attempt...")
             final_history = history + f"\n\nSENIOR_DEBUGGER_ADVICE: {advice}\nExecute the task one last time using this advice."
-            return self.client_lite.generate(final_history, system_instruction=sys_prompt)
+            return self.client_lite.generate(final_history, system_instruction=sys_prompt, images=images)
 
         return f"Task failed after 5 attempts and Senior Debugger consultation."
 
-    def solve_task(self, user_goal):
+    def solve_task(self, user_goal, images=None):
         past = self.db.semantic_search(user_goal)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         session_dir = os.path.join(WORKSPACE, timestamp)
@@ -293,7 +304,7 @@ class GeminiMAS:
                   f"- Use Reviewers to verify critical code.\n"
                   f"- Set 'parallel': true only for independent tasks.")
 
-        plan_raw = self.client_pro.generate(prompt, system_instruction=sys_instr, json_mode=True)
+        plan_raw = self.client_pro.generate(prompt, system_instruction=sys_instr, json_mode=True, images=images)
         try: plan = json.loads(plan_raw.strip("`json \n"))
         except: return "Planning failed."
 
@@ -301,9 +312,9 @@ class GeminiMAS:
         threads = []
         q = queue.Queue()
 
-        def worker(step, sys_instr, results_so_far, q):
+        def worker(step, sys_instr, results_so_far, q, imgs):
             role = step.get('role', 'Developer')
-            res = self.run_worker_with_tools(step['task'], str(results_so_far), sys_instr, role=role)
+            res = self.run_worker_with_tools(step['task'], str(results_so_far), sys_instr, role=role, images=imgs)
             q.put((step['id'], res))
             with open(os.path.join(session_dir, f"task_{step['id']}_{role}.md"), 'w') as f: f.write(res)
             status(f" Task {step['id']} ({role}) Done.")
@@ -314,7 +325,7 @@ class GeminiMAS:
             status(f"\n[*] Spawning {role} for Task {step['id']} (Parallel: {is_parallel})...")
 
             if is_parallel:
-                t = threading.Thread(target=worker, args=(step, sys_instr, dict(results), q))
+                t = threading.Thread(target=worker, args=(step, sys_instr, dict(results), q, images))
                 t.start()
                 threads.append(t)
             else:
@@ -323,7 +334,7 @@ class GeminiMAS:
                     tid, tres = q.get(); results[tid] = tres
                 threads = []
 
-                worker(step, sys_instr, dict(results), q)
+                worker(step, sys_instr, dict(results), q, images)
                 while not q.empty():
                     tid, tres = q.get(); results[tid] = tres
 
@@ -332,21 +343,21 @@ class GeminiMAS:
             tid, tres = q.get(); results[tid] = tres
 
         status(f"\n[*] Final Review...")
-        final = self.client_lite.generate(f"Goal: {user_goal}\nResults: {json.dumps(results)}\nFormat final summary.", system_instruction=sys_instr)
+        final = self.client_lite.generate(f"Goal: {user_goal}\nResults: {json.dumps(results)}\nFormat final summary.", system_instruction=sys_instr, images=images)
         with open(os.path.join(session_dir, "final_response.md"), 'w') as f: f.write(final)
         self.db.save_memory(user_goal, final[:1000])
         return final
 
-    def process(self, user_input, stream=False):
+    def process(self, user_input, stream=False, images=None):
         sys_instr = self.get_system_context()
         if "TASK" in self.triage(user_input):
-            response = self.solve_task(user_input)
+            response = self.solve_task(user_input, images=images)
             if stream: yield response
             else: return response
         else:
             if stream:
                 full_resp = ""
-                for chunk in self.client_lite.generate(user_input, system_instruction=sys_instr, history=self.history, stream=True):
+                for chunk in self.client_lite.generate(user_input, system_instruction=sys_instr, history=self.history, stream=True, images=images):
                     full_resp += chunk
                     yield chunk
 
@@ -358,7 +369,7 @@ class GeminiMAS:
                     with open(CHAT_LOG, 'a') as f:
                         f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
             else:
-                response = self.client_lite.generate(user_input, system_instruction=sys_instr, history=self.history)
+                response = self.client_lite.generate(user_input, system_instruction=sys_instr, history=self.history, images=images)
                 if response:
                     entry_user = {"role": "user", "text": user_input}
                     entry_model = {"role": "model", "text": response}
@@ -367,7 +378,6 @@ class GeminiMAS:
                     with open(CHAT_LOG, 'a') as f:
                         f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
                 return response
-
 def heartbeat_daemon(api_key):
     mas = GeminiMAS(api_key)
     print(f"\n[!] Heartbeat Daemon Started v{__version__} (Evolution Mode + Distributed Listener)")
@@ -422,7 +432,7 @@ def heartbeat_daemon(api_key):
 def interactive_loop(api_key):
     mas = GeminiMAS(api_key)
     print("\n" + "="*50 + f"\nGeminiMAS v{__version__} (Evolution Shell)\n" + "="*50)
-    print("Commands: /enable [f], /disable [f], /config, /help, exit")
+    print("Commands: /enable [f], /disable [f], /config, /image [path], /help, exit")
     while True:
         try:
             inp = input("\n[You] > ").strip()
@@ -431,6 +441,17 @@ def interactive_loop(api_key):
             if inp.lower() == 'heartbeat': heartbeat_daemon(api_key); continue
 
             # Local Management Commands
+            images = None
+            if inp.startswith("/image "):
+                parts = inp.split(" ", 1)
+                img_path = os.path.expanduser(parts[1].strip())
+                if os.path.exists(img_path):
+                    images = [img_path]
+                    inp = input("[Prompt for Image] > ").strip()
+                else:
+                    print(f"Error: Image not found at {img_path}")
+                    continue
+
             if inp.startswith("/disable "):
                 print(toggle_feature(inp.split(" ", 1)[1].strip(), enable=False))
                 continue
@@ -460,6 +481,7 @@ if __name__ == "__main__":
     subparsers.add_parser('heartbeat')
     parser.add_argument('positional_prompt', nargs='?', type=str)
     parser.add_argument('--prompt', type=str)
+    parser.add_argument('--image', type=str, help='Path to an image file')
     args = parser.parse_args()
 
     key = os.getenv("GEMINI_API_KEY")
@@ -471,8 +493,11 @@ if __name__ == "__main__":
         heartbeat_daemon(key)
     else:
         prompt = args.prompt or args.positional_prompt
+        images = [args.image] if args.image else None
         if prompt:
             mas = GeminiMAS(key)
-            print(mas.process(prompt))
+            for chunk in mas.process(prompt, stream=True, images=images):
+                print(chunk, end="", flush=True)
+            print()
         else:
             interactive_loop(key)

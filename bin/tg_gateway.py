@@ -114,10 +114,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Route to another machine
         await route_to_machine(target_machine, text, update)
 
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update): return
+
+    photo_file = await update.message.photo[-1].get_file()
+    img_path = os.path.expanduser(f'~/gemini_agents/workspace/tg_image_{int(time.time())}.jpg')
+    os.makedirs(os.path.dirname(img_path), exist_ok=True)
+    await photo_file.download_to_drive(img_path)
+
+    caption = update.message.caption or "Analyze this image."
+    status_msg = await update.message.reply_text(f"[{MY_HOSTNAME}] Image received. Thinking...")
+
+    mas_path = os.path.expanduser('~/gemini_agents/bin/gemini_mas.py')
+    async with semaphore:
+        try:
+            # Call core engine with image
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, mas_path, '--prompt', caption, '--image', img_path,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+            response = stdout.decode().strip() or f"Error: {stderr.decode()}"
+            await status_msg.edit_text(response[:4096])
+        except Exception as e: await status_msg.edit_text(f"Error: {str(e)}")
+
 if __name__ == '__main__':
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     app = ApplicationBuilder().token(token).build()
     app.add_handler(CommandHandler("approve", approve_command))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     logger.info(f"Gateway started on {MY_HOSTNAME}. Focus: {get_focus()}")
     app.run_polling()
