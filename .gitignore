@@ -10,3 +10,8 @@ logs/
 # Python cache
 __pycache__/
 *.pyc
+.github/
+bin/*.old
+profile_output.txt
+profiling_log.txt
+profiling_output.txt
