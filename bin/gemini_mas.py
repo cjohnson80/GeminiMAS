@@ -104,7 +104,7 @@ class GeminiMAS:
 
 def interactive_loop(api_key):
     mas = GeminiMAS(api_key)
-    print("\n" + "="*50 + "\nGeminiMAS v6.0 (Next.js & TS Edition)\n" + "="*50)
+    print("\n" + "="*50 + "\nGeminiMAS v6.1 (Self-Contained Edition)\n" + "="*50)
     while True:
         try:
             goal = input("\n[You] > ").strip()

@@ -1,7 +1,7 @@
 import json, os, urllib.request, time, subprocess, sys, socket
 
 AGENT_ROOT = os.path.expanduser("~/gemini_agents")
-ENV_FILE = os.path.expanduser("~/Desktop/.env")
+ENV_FILE = os.path.join(AGENT_ROOT, ".env")
 
 def get_env(key):
     if not os.path.exists(ENV_FILE): return os.getenv(key)
@@ -30,7 +30,7 @@ def get_updates(offset):
     except: return None
 
 def main():
-    print(f"[*] Telegram Gateway v3.2 (Robust) on '{COMPUTER_NAME}'")
+    print(f"[*] Telegram Gateway v3.3 (Self-Contained) on '{COMPUTER_NAME}'")
     offset = 0
     while True:
         updates = get_updates(offset)
@@ -39,17 +39,11 @@ def main():
                 offset = up["update_id"] + 1
                 msg = up.get("message")
                 if not msg: continue
-                
-                # Robust ID check
                 from_user = msg.get("from", {})
                 chat = msg.get("chat", {})
                 user_id = str(from_user.get("id", ""))
                 chat_id = chat.get("id")
-
-                if user_id != ALLOWED_USER_ID:
-                    print(f"Unauthorized: {user_id}")
-                    continue
-
+                if user_id != ALLOWED_USER_ID: continue
                 text = msg.get("text", "")
                 if text.startswith("/status"):
                     res = subprocess.run("free -h | grep Mem", shell=True, capture_output=True, text=True).stdout

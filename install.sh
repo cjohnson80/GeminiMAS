@@ -1,11 +1,11 @@
 #!/bin/bash
-# GeminiMAS Universal Installer v6.0
+# GeminiMAS Universal Installer v6.1
 # Tuned for Next.js & TypeScript Development
 
 set -e
 
 echo "==============================================="
-echo " Installing GeminiMAS v6.0 (Power-User Edition)"
+echo " Installing GeminiMAS v6.1 (Self-Contained)"
 echo "==============================================="
 
 AGENT_ROOT="$HOME/gemini_agents"
@@ -30,7 +30,7 @@ cat << 'EOF' > "$AGENT_ROOT/skills/nextjs_optimization.md"
 4. Use `next dev --turbo` for faster local iteration.
 EOF
 
-# 3. Write the Python Core Engine (v6.0)
+# 3. Write the Python Core Engine (v6.1)
 cat << 'EOF' > "$AGENT_ROOT/bin/gemini_mas.py"
 import json, os, urllib.request, urllib.error, sys, threading, queue, subprocess, time, base64, mimetypes
 from datetime import datetime
@@ -138,7 +138,7 @@ class GeminiMAS:
 
 def interactive_loop(api_key):
     mas = GeminiMAS(api_key)
-    print("\n" + "="*50 + "\nGeminiMAS v6.0 (Next.js & TS Edition)\n" + "="*50)
+    print("\n" + "="*50 + "\nGeminiMAS v6.1 (Self-Contained Edition)\n" + "="*50)
     while True:
         try:
             goal = input("\n[You] > ").strip()
@@ -152,12 +152,12 @@ if __name__ == "__main__":
     if key: interactive_loop(key)
 EOF
 
-# 4. Write the FIXED Telegram Gateway (v3.2)
+# 4. Write the FIXED Telegram Gateway (v3.3 - Self-Contained)
 cat << 'EOF' > "$AGENT_ROOT/bin/tg_gateway.py"
 import json, os, urllib.request, time, subprocess, sys, socket
 
 AGENT_ROOT = os.path.expanduser("~/gemini_agents")
-ENV_FILE = os.path.expanduser("~/Desktop/.env")
+ENV_FILE = os.path.join(AGENT_ROOT, ".env")
 
 def get_env(key):
     if not os.path.exists(ENV_FILE): return os.getenv(key)
@@ -186,7 +186,7 @@ def get_updates(offset):
     except: return None
 
 def main():
-    print(f"[*] Telegram Gateway v3.2 (Robust) on '{COMPUTER_NAME}'")
+    print(f"[*] Telegram Gateway v3.3 (Self-Contained) on '{COMPUTER_NAME}'")
     offset = 0
     while True:
         updates = get_updates(offset)
@@ -195,17 +195,11 @@ def main():
                 offset = up["update_id"] + 1
                 msg = up.get("message")
                 if not msg: continue
-                
-                # Robust ID check
                 from_user = msg.get("from", {})
                 chat = msg.get("chat", {})
                 user_id = str(from_user.get("id", ""))
                 chat_id = chat.get("id")
-
-                if user_id != ALLOWED_USER_ID:
-                    print(f"Unauthorized: {user_id}")
-                    continue
-
+                if user_id != ALLOWED_USER_ID: continue
                 text = msg.get("text", "")
                 if text.startswith("/status"):
                     res = subprocess.run("free -h | grep Mem", shell=True, capture_output=True, text=True).stdout
@@ -223,6 +217,21 @@ EOF
 
 chmod +x "$AGENT_ROOT/bin/gemini_mas.py"
 chmod +x "$AGENT_ROOT/bin/tg_gateway.py"
+
+# 5. Create the global wrapper script (v6.1 - Self-Contained)
+cat << 'EOF' > "$HOME/.local/bin/gagent"
+#!/bin/bash
+if [ -f "$HOME/gemini_agents/.env" ]; then
+    export $(grep -v '^#' "$HOME/gemini_agents/.env" | xargs)
+fi
+if [ -z "$GEMINI_API_KEY" ]; then
+    echo "Error: GEMINI_API_KEY is not set in ~/gemini_agents/.env"
+    exit 1
+fi
+python3 "$HOME/gemini_agents/bin/gemini_mas.py" "$@"
+EOF
+
+chmod +x "$HOME/.local/bin/gagent"
 
 echo "==============================================="
 echo " Setup Complete! "
