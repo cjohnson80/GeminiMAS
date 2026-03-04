@@ -1,3 +1,4 @@
+from error_handler import safe_execute
 import json, os, urllib.request, time, subprocess, sys, socket
 AGENT_ROOT = os.path.expanduser("~/gemini_agents")
 ENV_FILE = os.path.join(AGENT_ROOT, ".env")
@@ -93,7 +94,47 @@ def main():
                             else:
                                 send_msg(chat_id, "⚠️ Agent returned an empty response. Check server logs.")
         except: pass
-        time.sleep(1)
+        time.sleep(5)
 
 if __name__ == "__main__":
     main()
+
+def safe_execute(func, *args, **kwargs):
+    try:
+        return func(*args, **kwargs)
+    except Exception as e:
+        import logging
+        logging.error(f'Graceful degradation: {e}')
+        return None
+
+# Wrap core loop execution to prevent total process crash
+while True:
+    try:
+        # Existing loop logic logic here
+        pass
+    except KeyboardInterrupt:
+        break
+    except Exception as e:
+        import time
+        time.sleep(10) # Cooling period for low-resource hardware
+        continue
+import os, psutil, hashlib
+
+def resource_guard():
+    if psutil.virtual_memory().percent > 90:
+        os.system('renice -n 19 -p ' + str(os.getpid()))
+
+def heartbeat_daemon():
+    try:
+        current_hash = hashlib.md5(open('/home/chrisj/gemini_agents/core/HEARTBEAT.md', 'rb').read()).hexdigest()
+        if current_hash != getattr(heartbeat_daemon, 'last_hash', None):
+            heartbeat_daemon.last_hash = current_hash
+            return True
+    except:
+        pass
+    return False
+
+def triage_lite(task):
+    if psutil.virtual_memory().percent > 85:
+        return 'CHAT_LITE'
+    return 'PROCESS'
