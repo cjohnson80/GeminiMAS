@@ -1,0 +1,1 @@
+import time, psutil, os; print(f'Simulating ActivityMonitor: CPU={psutil.cpu_percent()}%, MEM={psutil.virtual_memory().percent}%')
