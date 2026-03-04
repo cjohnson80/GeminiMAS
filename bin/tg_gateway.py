@@ -5,6 +5,7 @@ import urllib.error
 import time
 import subprocess
 import sys
+import socket
 from datetime import datetime
 
 # Configuration
@@ -30,6 +31,18 @@ if not BOT_TOKEN:
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/"
 FILE_URL = f"https://api.telegram.org/file/bot{BOT_TOKEN}/"
 
+# Track the server process
+server_proc = None
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except: return "127.0.0.1"
+
 def send_msg(chat_id, text):
     url = f"{BASE_URL}sendMessage"
     payload = {"chat_id": chat_id, "text": f"[{COMPUTER_NAME}] {text}"}
@@ -40,59 +53,61 @@ def send_msg(chat_id, text):
 def get_updates(offset):
     url = f"{BASE_URL}getUpdates?offset={offset}&timeout=30"
     try:
-        with urllib.request.urlopen(url, timeout=40) as r:
-            return json.loads(r.read().decode())
+        with urllib.request.urlopen(url, timeout=40) as r: return json.loads(r.read().decode())
     except: return None
 
 def download_file(file_id, chat_id):
-    """Downloads a photo from Telegram to the workspace."""
     try:
-        # Get file path from API
         url = f"{BASE_URL}getFile?file_id={file_id}"
-        with urllib.request.urlopen(url) as r:
-            file_path = json.loads(r.read().decode())['result']['file_path']
-        
-        # Download the actual file
+        with urllib.request.urlopen(url) as r: file_path = json.loads(r.read().decode())['result']['file_path']
         download_url = f"{FILE_URL}{file_path}"
-        # Save to latest workspace
         workspaces = sorted([os.path.join(WORKSPACE, d) for d in os.listdir(WORKSPACE) if os.path.isdir(os.path.join(WORKSPACE, d))], reverse=True)
         target_dir = workspaces[0] if workspaces else WORKSPACE
-        
         filename = f"vision_{int(time.time())}.jpg"
         target_path = os.path.join(target_dir, filename)
-        
-        with urllib.request.urlopen(download_url) as r, open(target_path, 'wb') as f:
-            f.write(r.read())
-        
-        send_msg(chat_id, f"Image received and saved to: {target_path}. You can now run tasks that refer to this image.")
-    except Exception as e:
-        send_msg(chat_id, f"Failed to download image: {str(e)}")
+        with urllib.request.urlopen(download_url) as r, open(target_path, 'wb') as f: f.write(r.read())
+        send_msg(chat_id, f"Image saved to workspace. You can now reference it in tasks.")
+    except Exception as e: send_msg(chat_id, f"Download failed: {str(e)}")
 
 def process_msg(msg):
+    global server_proc
     chat_id = msg["chat_id"]
-    # Handle Photos
     if "photo" in msg:
-        # Telegram sends multiple sizes, get the largest one (last in list)
-        file_id = msg["photo"][-1]["file_id"]
-        download_file(file_id, chat_id)
+        download_file(msg["photo"][-1]["file_id"], chat_id)
         return
 
-    # Handle Text Commands
     text = msg.get("text", "")
     if text.startswith("/status"):
         res = subprocess.run("free -h | grep Mem", shell=True, capture_output=True, text=True).stdout
         send_msg(chat_id, f"Memory: {res}")
+    
+    elif text.startswith("/server "):
+        cmd = text.split(" ")[1].lower()
+        if cmd == "start":
+            if server_proc:
+                send_msg(chat_id, "Server already running.")
+            else:
+                ip = get_local_ip()
+                server_proc = subprocess.Popen(["python3", "-m", "http.server", "8000"], cwd=WORKSPACE)
+                send_msg(chat_id, f"Web Server started! Preview here:\nhttp://{ip}:8000")
+        elif cmd == "stop":
+            if server_proc:
+                server_proc.terminate()
+                server_proc = None
+                send_msg(chat_id, "Web Server stopped.")
+            else:
+                send_msg(chat_id, "No server running.")
+
     elif text.startswith("/all ") or text.startswith(f"/{COMPUTER_NAME.lower()} "):
         goal = text.split(" ", 1)[1]
-        send_msg(chat_id, f"Starting task: {goal}")
+        send_msg(chat_id, f"Starting: {goal}")
         try:
             res = subprocess.run(["gagent", goal], capture_output=True, text=True, timeout=300).stdout
             send_msg(chat_id, f"Result:\n{res[:3500]}")
-        except Exception as e:
-            send_msg(chat_id, f"Task Error: {str(e)}")
+        except Exception as e: send_msg(chat_id, f"Error: {str(e)}")
 
 def main():
-    print(f"[*] Telegram Gateway v2.0 (Vision Enabled) on '{COMPUTER_NAME}'")
+    print(f"[*] Telegram Gateway v3.0 (Server Control) on '{COMPUTER_NAME}'")
     offset = 0
     while True:
         updates = get_updates(offset)
