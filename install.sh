@@ -42,7 +42,7 @@ smart_run() {
             echo "[?] Consulting Gemini for a fix..."
             local ERROR_MSG=$(eval "$cmd" 2>&1 | tail -n 10 | base64)
             local PROMPT="The following bash command failed: '$cmd'. Error: $(echo $ERROR_MSG | base64 -d). Provide ONLY the corrected bash command to fix this."
-            local ADVICE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-pro-preview:generateContent?key=$KEY" \
+            local ADVICE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=$KEY" \
                 -H "Content-Type: application/json" \
                 -d "{\"contents\": [{\"parts\":[{\"text\": \"$PROMPT\"}]}]}" | jq -r '.candidates[0].content.parts[0].text' | sed 's/`//g')
 
@@ -135,8 +135,9 @@ if [ -f "$AGENT_ROOT/.env" ]; then
     # Use safer export for env vars
     while IFS='=' read -r key value; do
         [[ "$key" =~ ^#.*$ ]] || [[ -z "$key" ]] && continue
-        export "$key"="${value%\"}"
-        export "$key"="${value#\"}"
+        # Strip leading/trailing whitespace and quotes
+        v=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^\"//;s/\"$//')
+        export "$key"="$v"
     done < "$AGENT_ROOT/.env"
 fi
 "$AGENT_ROOT/venv/bin/python3" "$AGENT_ROOT/bin/gemini_mas.py" "$@"

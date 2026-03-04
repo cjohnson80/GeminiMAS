@@ -1,5 +1,5 @@
 duckdb
-polars
+polars[rtcompat]
 pyarrow
 python-telegram-bot
 psutil
