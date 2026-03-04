@@ -343,15 +343,50 @@ class GeminiMAS:
 
 def heartbeat_daemon(api_key):
     mas = GeminiMAS(api_key)
-    print(f"\n[!] Heartbeat Daemon Started v{__version__} (Evolution Mode)")
+    print(f"\n[!] Heartbeat Daemon Started v{__version__} (Evolution Mode + Distributed Listener)")
+
+    repo_path = os.path.expanduser('~/GeminiMAS_Repo')
+    mailbox_path = os.path.join(repo_path, 'mailbox')
+
     while True:
         try:
+            # Sync with Repo
+            subprocess.run(f"cd {repo_path} && git pull origin main", shell=True, capture_output=True)
+
+            # 1. Check for Mailbox Commands
+            cmd_file = os.path.join(mailbox_path, f"{mas.machine_name}_cmd.json")
+            if os.path.exists(cmd_file):
+                print(f"\n[Mail] Received remote command...")
+                try:
+                    with open(cmd_file, 'r') as f: cmd_data = json.load(f)
+
+                    # Process the command
+                    result = ""
+                    for chunk in mas.process(cmd_data['command'], stream=True):
+                        result += chunk
+
+                    # Write result back
+                    res_file = os.path.join(mailbox_path, f"{mas.machine_name}_res.json")
+                    with open(res_file, 'w') as f:
+                        json.dump({"result": result, "timestamp": time.time()}, f)
+
+                    # Remove the command file locally
+                    os.remove(cmd_file)
+
+                    # Push result to Git
+                    subprocess.run(f"cd {repo_path} && git add mailbox/ && git commit -m 'Mailbox: result from {mas.machine_name}' && git push origin main", shell=True)
+                    print(f"[Mail] Result pushed.")
+                except Exception as e:
+                    print(f"Mailbox processing error: {e}")
+
+            # 2. Process regular Heartbeat Evolution Tasks
             hb_list = read_file_safe(HEARTBEAT_FILE)
             if "[ ]" in hb_list:
                 print(f"\n[Pulse] {datetime.now()} - Processing Evolution Tasks...")
                 # Consume the generator
                 for _ in mas.process(f"Execute the pending tasks in {HEARTBEAT_FILE}", stream=True): pass
-            time.sleep(3600) # Check every hour
+
+            time.sleep(10) # Fast check for commands
         except KeyboardInterrupt: break
         except Exception as e:
             print(f"Heartbeat Error: {e}")
