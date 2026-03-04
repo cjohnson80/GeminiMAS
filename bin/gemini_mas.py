@@ -138,6 +138,7 @@ class Persistence:
 class GeminiMAS:
     def __init__(self, api_key):
         self.api_key = api_key
+        self.machine_name = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
         self.lite_model = "gemini-2.0-flash-lite"
         self.pro_model = "gemini-3.5-pro-preview"
         self.client_lite = GeminiClient(api_key, self.lite_model)
@@ -147,6 +148,10 @@ class GeminiMAS:
         if os.path.exists(CHAT_LOG):
             with open(CHAT_LOG, 'r') as f:
                 for l in f.readlines()[-6:]: self.history.append(json.loads(l))
+
+    def get_system_context(self):
+        soul = read_file_safe(SOUL_FILE)
+        return f"{soul}\n\nCURRENT_MACHINE: {self.machine_name}\n"
 
     def triage(self, user_input):
         prompt = f"Analyze: '{user_input}'. Is this a casual CHAT or a TASK that requires coding/tools/system changes? Reply ONLY 'CHAT' or 'TASK'."
@@ -178,7 +183,7 @@ class GeminiMAS:
         os.makedirs(session_dir, exist_ok=True)
 
         status("[*] Planning...")
-        sys_instr = read_file_safe(SOUL_FILE)
+        sys_instr = self.get_system_context()
         plan_raw = self.client_pro.generate(f"Goal: {user_goal}\nPast Context: {past}\nPlan 2-4 tasks. JSON format: [{{'id':1, 'task':'...'}}]", system_instruction=sys_instr, json_mode=True)
         try: plan = json.loads(plan_raw.strip("`json \n"))
         except: return "Planning failed."
@@ -198,11 +203,11 @@ class GeminiMAS:
         return final
 
     def process(self, user_input):
+        sys_instr = self.get_system_context()
         if "TASK" in self.triage(user_input):
             response = self.solve_task(user_input)
         else:
-            response = self.client_lite.generate(user_input, system_instruction=read_file_safe(SOUL_FILE), history=self.history)
-
+            response = self.client_lite.generate(user_input, system_instruction=sys_instr, history=self.history)
         if response:
             entry_user = {"role": "user", "text": user_input}
             entry_model = {"role": "model", "text": response}

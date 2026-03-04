@@ -41,7 +41,8 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with semaphore:
         try:
             # Evolution Protocol: Merge the approved branch into main
-            cmd = f"cd {repo_path} && git checkout main && git merge {branch_name} && git push origin main"
+            # We pull main first to avoid conflicts
+            cmd = f"cd {repo_path} && git checkout main && git pull origin main && git merge {branch_name} && git push origin main && ./install.sh"
             proc = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -49,14 +50,11 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stdout, stderr = await proc.communicate()
 
             if proc.returncode == 0:
-                await update.message.reply_text(f"Successfully merged and pushed branch: {branch_name}")
-                # Optional: Re-run installer to apply changes
-                # subprocess.Popen(['/bin/bash', os.path.join(repo_path, 'install.sh')])
+                await update.message.reply_text(f"Successfully merged evolution: {branch_name}. System updated.")
             else:
                 await update.message.reply_text(f"Merge failed: {stderr.decode()}")
         except Exception as e:
             await update.message.reply_text(f"Error during merge: {str(e)}")
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update):
         return
