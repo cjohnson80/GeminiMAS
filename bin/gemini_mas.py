@@ -201,48 +201,45 @@ class Persistence:
         self._init_db()
 
     def _init_db(self):
-        # Retry loop for initial connection
-        for _ in range(5):
+        # Ensure table exists
+        for _ in range(10):
             try:
-                with db_lock:
-                    self.con = duckdb.connect(DB_FILE)
-                    # Enable Write-Ahead Logging for better concurrency
-                    self.con.execute("PRAGMA journal_mode=WAL")
-                    self.con.execute("CREATE TABLE IF NOT EXISTS memory (timestamp TIMESTAMP, goal TEXT, summary TEXT, embedding FLOAT[768])")
+                with duckdb.connect(DB_FILE) as con:
+                    con.execute("CREATE TABLE IF NOT EXISTS memory (timestamp TIMESTAMP, goal TEXT, summary TEXT, embedding FLOAT[768])")
                 return
             except Exception as e:
-                if "locking" in str(e).lower():
-                    time.sleep(1)
+                if "lock" in str(e).lower():
+                    time.sleep(0.5)
                     continue
                 raise e
 
     def save_memory(self, goal, summary):
         if vec := self.client.embed(goal + " " + summary):
-            for _ in range(10): # Robust retry for writes
+            for _ in range(20): # Robust retry for writes
                 try:
-                    with db_lock:
-                        self.con.execute("INSERT INTO memory VALUES (now(), ?, ?, ?)", [goal, summary, vec])
+                    with duckdb.connect(DB_FILE) as con:
+                        con.execute("INSERT INTO memory VALUES (now(), ?, ?, ?)", [goal, summary, vec])
                     return
                 except Exception as e:
-                    if "locking" in str(e).lower():
-                        time.sleep(0.5)
+                    if "lock" in str(e).lower():
+                        time.sleep(1)
                         continue
                     break
 
     def semantic_search(self, query, limit=3):
         results = []
         if vec := self.client.embed(query):
-            for _ in range(5):
+            for _ in range(10):
                 try:
-                    with db_lock:
-                        results = self.con.execute("SELECT goal, summary FROM memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[768]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
+                    # Open in read_only mode to allow multiple readers
+                    with duckdb.connect(DB_FILE, read_only=True) as con:
+                        results = con.execute("SELECT goal, summary FROM memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[768]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
                     break
                 except Exception as e:
-                    if "locking" in str(e).lower():
+                    if "lock" in str(e).lower():
                         time.sleep(0.2)
                         continue
                     break
-
         # Skill Injection
         skills_found = []
         if os.path.exists(SKILLS_DIR):
