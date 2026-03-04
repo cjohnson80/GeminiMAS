@@ -34,30 +34,17 @@ def process_cmd(msg):
     elif text.startswith("/approve "):
         branch = text.split(" ")[1].strip()
         send_msg(chat_id, f"🚀 STARTING DEPLOYMENT: {branch}")
-        
-        # Step 1: Sync Repo
-        send_msg(chat_id, "📦 Step 1/4: Pulling latest Main...")
         subprocess.run(f"cd {REPO_DIR} && git checkout main && git pull origin main", shell=True)
-        
-        # Step 2: Merge
-        send_msg(chat_id, f"🔗 Step 2/4: Merging {branch} into main...")
-        merge_res = subprocess.run(f"cd {REPO_DIR} && git merge origin/{branch}", shell=True, capture_output=True, text=True)
-        
-        # Step 3: Push
-        send_msg(chat_id, "☁️ Step 3/4: Pushing to Cloud...")
+        subprocess.run(f"cd {REPO_DIR} && git merge origin/{branch}", shell=True)
         subprocess.run(f"cd {REPO_DIR} && git push origin main", shell=True)
-        
-        # Step 4: Reinstall
-        send_msg(chat_id, "🔄 Step 4/4: Reinstalling and Rebooting Agents...")
         subprocess.run(f"cd {REPO_DIR} && ./install.sh", shell=True)
-        
-        send_msg(chat_id, "🎉 DEPLOYMENT SUCCESSFUL! All HiveMind nodes will sync on next pulse.")
+        send_msg(chat_id, "🎉 DEPLOYMENT SUCCESSFUL!")
 
     elif text.startswith("/all ") or text.startswith(f"/{COMPUTER_NAME.lower()} "):
         goal = text.split(" ", 1)[1]
-        send_msg(chat_id, f"⚡ Task Received: '{goal[:20]}...' Starting execution.")
+        send_msg(chat_id, f"⚡ Task Received. Executing...")
         res = subprocess.run([os.path.expanduser("~/.local/bin/gagent"), goal], capture_output=True, text=True).stdout
-        send_msg(chat_id, f"✅ Task Finished.\n{res[:3500]}")
+        send_msg(chat_id, f"✅ Done.\n{res[:3500]}")
 
     elif text and not text.startswith("/"):
         send_msg(chat_id, "🧠 Thinking...")
@@ -65,7 +52,7 @@ def process_cmd(msg):
         send_msg(chat_id, f"Agent:\n{res[:3500]}")
 
 def main():
-    print(f"[*] Telegram Gateway v4.2 Active on '{COMPUTER_NAME}'")
+    print(f"[*] Telegram Gateway v4.3 (Atomic) Active on '{COMPUTER_NAME}'")
     offset = 0
     while True:
         try:
