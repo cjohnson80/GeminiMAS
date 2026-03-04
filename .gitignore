@@ -1,0 +1,12 @@
+# Ignore local keys and keys files
+.env
+*.env
+
+# Ignore workspace and database data
+workspace/
+memory/
+logs/
+
+# Python cache
+__pycache__/
+*.pyc
