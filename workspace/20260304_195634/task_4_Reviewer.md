@@ -1,0 +1,1 @@
+{'tool': 'run_shell', 'payload': 'python3 -m py_compile bin/gemini_mas.py'}

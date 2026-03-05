@@ -1,0 +1,1 @@
+{"tool": "read_file", "payload": "/home/chrisj/gemini_agents/bin/tg_gateway.py"}

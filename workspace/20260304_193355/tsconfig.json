@@ -1,0 +1,1 @@
+{"compilerOptions": {"strict": true, "target": "ESNext", "module": "CommonJS", "skipLibCheck": true, "outDir": "./dist"}}

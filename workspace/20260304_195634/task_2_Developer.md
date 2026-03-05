@@ -1,0 +1,1 @@
+{'tool': 'read_file', 'payload': 'local_config.json'}

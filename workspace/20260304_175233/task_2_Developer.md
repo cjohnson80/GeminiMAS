@@ -1,0 +1,1 @@
+{"tool": "run_shell", "payload": "grep -nE \"def probe_system_defaults|ThreadPoolExecutor|ResourceGuard|import polars|import duckdb\" /home/chrisj/gemini_agents/bin/gemini_mas.py"}

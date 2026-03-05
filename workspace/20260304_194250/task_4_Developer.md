@@ -1,0 +1,1 @@
+{"tool": "run_shell", "payload": "cd test-web && npm pkg set scripts.dev=\"next dev\" scripts.build=\"next build\" scripts.start=\"next start\" scripts.lint=\"next lint\" && npm install next react react-dom && npm install -D typescript @types/react @types/node @types/react-dom && npm run build"}

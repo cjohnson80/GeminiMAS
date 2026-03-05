@@ -1,0 +1,1 @@
+{"optimization_strategy": "low-resource", "server_components": true, "image_optimization": false, "static_generation": "force-ssg", "typescript_strict": true, "lint_rules": {"no-any": "error", "prefer-const": "warn"}}

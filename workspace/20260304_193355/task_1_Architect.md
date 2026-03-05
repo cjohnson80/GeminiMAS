@@ -1,0 +1,1 @@
+{"tool": "read_file", "payload": "{\"path\": \"/home/chrisj/gemini_agents/workspace/20260304_193355/PROJECT_SUMMARY.md\"}"}

@@ -1,0 +1,4 @@
+--- PARSING REPORT ---
+Tasks Found: 2
+Tasks List: [{'task_description': '**EVOLUTION PROTOCOL (GLOBAL):** Examine your source code in \\`$REPO_ROOT/bin/\\`. Invent a new lightweight feature or optimization for ALL machines.', 'source_file': '/home/chrisj/gemini_agents/core/HEARTBEAT.md'}, {'task_description': '**EVOLUTION PROTOCOL (LOCAL):** Optimize your performance for this specific machine (\\`\\$CURRENT_MACHINE\\`).', 'source_file': '/home/chrisj/gemini_agents/core/HEARTBEAT.md'}]
+--- END REPORT ---

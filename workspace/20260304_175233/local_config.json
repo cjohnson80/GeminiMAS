@@ -1,0 +1,16 @@
+{
+  "resource_limits": {
+    "max_threads": 2,
+    "mem_limit": "512MB"
+  },
+  "disabled_features": [
+    "telemetry_verbose",
+    "background_indexing",
+    "nlp_heavy_parsing",
+    "realtime_logging"
+  ],
+  "branch_policy": {
+    "protected": ["main"],
+    "experimental_prefix": ["feat/opt-", "evolve/"]
+  }
+}

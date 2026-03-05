@@ -1,0 +1,1 @@
+{"tool": "run_shell", "payload": "python3 /home/chrisj/gemini_agents/bin/gemini_mas.py --debug --dry-run"}

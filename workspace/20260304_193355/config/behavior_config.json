@@ -1,0 +1,18 @@
+{
+  "strict_mode": true,
+  "typescript_config": {
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "target": "ESNext"
+  },
+  "nextjs_optimization": {
+    "image_optimization": "disabled",
+    "font_optimization": "lazy",
+    "server_side_rendering": "hybrid"
+  },
+  "hardware_constraints": {
+    "max_threads": 2,
+    "memory_limit_mb": 512
+  },
+  "code_quality_gate": "strict"
+}

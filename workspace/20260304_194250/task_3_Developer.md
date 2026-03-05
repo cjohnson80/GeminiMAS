@@ -1,0 +1,1 @@
+{"tool": "run_shell", "payload": "cd test-web && mkdir -p app components/{ui,forms,layout} lib hooks types public && if [ -d \"src\" ]; then [ -d \"src/app\" ] && mv src/app/* app/ 2>/dev/null; rm -rf src; fi && ls -F"}

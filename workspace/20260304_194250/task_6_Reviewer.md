@@ -1,0 +1,1 @@
+{"tool": "run_shell", "payload": "cd test-web && sed -i 's/\"lint\": \"next lint lint\"/\"lint\": \"next lint\"/g' package.json && npx eslint . --ext .js,.jsx,.ts,.tsx"}

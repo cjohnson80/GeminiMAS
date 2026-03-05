@@ -1,0 +1,3 @@
+- [ ] Implement initial parsing logic
+- [ ] Integrate message queue handler
+- [ ] Write unit tests for StateManager
