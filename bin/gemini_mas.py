@@ -446,7 +446,7 @@ class GeminiMAS:
         else:
             if stream:
                 full_resp = ""
-                for chunk in self.client_lite.generate(user_input, system_instruction=sys_instr, history=self.history, stream=True, images=images):
+                for chunk in self.client_lite.generate_stream(user_input, system_instruction=sys_instr, history=self.history, images=images):
                     full_resp += chunk
                     yield chunk
 
