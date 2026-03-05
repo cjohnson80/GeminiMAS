@@ -103,11 +103,23 @@ C_CYAN = "\033[96m"
 C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
 C_RED = "\033[91m"
+C_PURPLE = "\033[95m"
 C_BOLD = "\033[1m"
+C_DIM = "\033[2m"
+C_ITALIC = "\033[3m"
 C_END = "\033[0m"
 
 def status(tag, msg, color=C_CYAN):
-    print(f"{color}{C_BOLD}[{tag}]{C_END} {msg}", flush=True)
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"{C_DIM}[{ts}]{C_END} {color}{C_BOLD}[{tag:^8}]{C_END} {msg}", flush=True)
+
+def divider(title=""):
+    width = 60
+    if not title:
+        print(f"{C_DIM}{'-' * width}{C_END}")
+    else:
+        side = (width - len(title) - 2) // 2
+        print(f"\n{C_DIM}{'-' * side}{C_END} {C_BOLD}{title}{C_END} {C_DIM}{'-' * side}{C_END}")
 
 def read_file_safe(path):
     if not os.path.exists(path): return ""
@@ -482,24 +494,26 @@ CRITICAL INSTRUCTIONS:
 
         scratchpad_path = os.path.join(session_dir, "PROJECT_SUMMARY.md")
         
-        # 1. Product Manager Phase
-        status("PM", "Defining Acceptance Criteria...", C_BLUE)
+        # 1. Agency Lead Phase
+        divider("CLIENT SPECIFICATIONS")
+        status("LEAD", "Extracting requirements and defining Acceptance Criteria...", C_PURPLE)
         sys_instr = self.get_system_context()
-        pm_prompt = f"Goal: {user_goal}\nPast Context: {past}\nYou are the Product Manager. Write clear, testable Acceptance Criteria for this goal. Output only the markdown text."
+        pm_prompt = f"Goal: {user_goal}\nPast Context: {past}\nYou are the AgencyLead. Write clear, testable Acceptance Criteria for this goal. Output only the markdown text."
         ac_text = self.client_pro.generate(pm_prompt, system_instruction=sys_instr, images=images)
         
         with open(scratchpad_path, "w") as f:
             f.write(f"# Project Scratchpad\n\nGoal: {user_goal}\n\n## Acceptance Criteria\n{ac_text}\n\n## Architecture\n(To be defined by Architect)\n")
 
         # 2. Architect Phase (Deep Planning)
-        status("PLAN", "Collaborative Planning initiated...", C_BLUE)
+        divider("ENGINEERING PLAN")
+        status("ARCHITECT", "Designing system architecture and task distribution...", C_BLUE)
         local_cfg = read_local_config()
         hw = local_cfg.get("_current_probe", {})
         cpu_threads = hw.get("cpu_count", 4)
         
         prompt = (f"Goal: {user_goal}\nAcceptance Criteria: {ac_text}\n"
                   f"Plan 3-15 tasks using a swarm of specialized experts. JSON format: [{{'id':1, 'role':'Role', 'task':'...', 'parallel': false}}].\n"
-                  f"Available Roles: Architect, Developer, Reviewer, SecurityExpert, DatabaseArchitect, DocumentationLead, PerformanceEngineer.\n"
+                  f"Available Roles: Architect, Developer, Reviewer, SecurityExpert, DatabaseArchitect, DocumentationLead, PerformanceEngineer, ToolSmith.\n"
                   f"- Use an Architect first to define structure in {scratchpad_path}.\n"
                   f"- Break large goals into multiple Developer tasks.\n"
                   f"- Use specialized experts (Security, DB) for critical components.\n"
@@ -509,11 +523,12 @@ CRITICAL INSTRUCTIONS:
         # Quota-aware generation
         plan_raw = self.client_pro.generate(prompt, system_instruction=sys_instr, json_mode=True, images=images)
         if "API Error 429" in plan_raw:
-            status("QUOTA", "Pro quota exceeded. Falling back to Lite model for planning...", C_YELLOW)
+            status("QUOTA", "Pro quota exceeded. Falling back to Lite model...", C_YELLOW)
             plan_raw = self.client_lite.generate(prompt, system_instruction=sys_instr, json_mode=True, images=images)
 
         try: 
             plan = json.loads(plan_raw.strip("`json \n"))
+            status("SWARM", f"Plan locked: {len(plan)} specialized tasks queued.", C_GREEN)
         except Exception as e:
             return f"Planning failed: {str(e)}"
 
@@ -524,28 +539,29 @@ CRITICAL INSTRUCTIONS:
         def worker(step, sys_instr, results_so_far, q, imgs):
             role = step.get('role', 'Developer')
             try:
-                status("START", f"Task {step['id']} assigned to {role}: {step['task'][:100]}...", C_GREEN)
+                status(role.upper(), f"Starting Task {step['id']}...", C_GREEN)
                 res = self.run_worker_with_tools(step['task'], str(results_so_far), sys_instr, role=role, images=imgs)
                 q.put((step['id'], res))
                 with open(os.path.join(session_dir, f"task_{step['id']}_{role}.md"), 'w') as f: f.write(res)
-                status("FINISH", f"Task {step['id']} ({role}) completed successfully.", C_GREEN)
+                status(role.upper(), f"Task {step['id']} completed.", C_GREEN)
             except Exception as e:
-                status("ERROR", f"Task {step['id']} ({role}) crashed: {str(e)}", C_RED)
+                status("CRASH", f"Task {step['id']} ({role}) failed: {str(e)}", C_RED)
                 q.put((step['id'], f"CRASH ERROR: {str(e)}"))
 
+        divider("EXECUTION PHASE")
         for step in plan:
             is_parallel = step.get('parallel', False)
             role = step.get('role', 'Developer')
-            status("SPAWN", f"Deploying {role} (Step {step['id']}) [Parallel: {is_parallel}]", C_BLUE)
-
+            
             if is_parallel:
+                status("DEPLOY", f"Running {role} (Task {step['id']}) in parallel...", C_BLUE)
                 t = threading.Thread(target=worker, args=(step, sys_instr, dict(results), q, images))
                 t.daemon = True
                 t.start()
                 threads.append(t)
             else:
                 # Wait for previous group with timeout
-                for t in threads: t.join(timeout=900) # 15 min timeout per parallel group
+                for t in threads: t.join(timeout=900)
                 while not q.empty():
                     tid, tres = q.get(); results[tid] = tres
                 threads = []
@@ -554,16 +570,18 @@ CRITICAL INSTRUCTIONS:
                 while not q.empty():
                     tid, tres = q.get(); results[tid] = tres
 
-        # Final join with timeout
+        # Final join
         for t in threads: t.join(timeout=900)
         while not q.empty():
             tid, tres = q.get(); results[tid] = tres
 
-        status("REVIEW", "Swarm tasks complete. Synthesizing final response...", C_BLUE)
-        final = self.client_lite.generate(f"Goal: {user_goal}\nResults: {json.dumps(results)}\nFormat final summary.", system_instruction=sys_instr, images=images)
+        divider("FINAL REVIEW")
+        status("SYSTEM", "Synthesizing expert results...", C_BLUE)
+        final = self.client_lite.generate(f"Goal: {user_goal}\nResults: {json.dumps(results)}\nFormat final agency-ready summary.", system_instruction=sys_instr, images=images)
         with open(os.path.join(session_dir, "final_response.md"), 'w') as f: f.write(final)
         self.db.save_memory(user_goal, final[:1000])
-        status("COMPLETE", "Evolution cycle finished. Returning to prompt.", C_GREEN)
+        status("SUCCESS", "Project delivered. Results saved to workspace.", C_GREEN)
+        divider()
         return final
 
     def process(self, user_input, stream=False, images=None):
@@ -665,11 +683,30 @@ def heartbeat_daemon(api_key):
 
 def interactive_loop(api_key):
     mas = GeminiMAS(api_key)
-    print("\n" + "="*50 + f"\nGeminiMAS v{__version__} (Evolution Shell)\n" + "="*50)
-    print("Commands: /enable [f], /disable [f], /config, /image [path], /help, exit")
+    cfg = read_local_config()
+    hw = cfg.get("_current_probe", {})
+    
+    # Professional Agency Splash
+    print(f"\n{C_BLUE}{C_BOLD}="*60)
+    print(f"{C_CYAN}  GeminiMAS Elite Swarm v{__version__} | Agency Edition")
+    print(f"{C_BLUE}="*60)
+    print(f"{C_DIM}  NODE:     {C_END}{C_BOLD}{mas.machine_name}{C_END}")
+    print(f"{C_DIM}  PROFILE:  {C_END}{hw.get('profile', 'standard').upper()}")
+    print(f"{C_DIM}  THREADS:  {C_END}{cfg.get('max_threads', 1)} Parallel Workers")
+    print(f"{C_DIM}  MEMORY:   {C_END}{hw.get('mem_gb', '0')} GB Detected")
+    print(f"{C_BLUE}="*60 + f"{C_END}\n")
+    
+    print(f"{C_YELLOW}Available Commands:{C_END}")
+    print(f" {C_BOLD}/config{C_END}  - View hardware & feature matrix")
+    print(f" {C_BOLD}/image{C_END}   - Attach image to the next prompt")
+    print(f" {C_BOLD}/enable{C_END}  - Re-activate a disabled feature")
+    print(f" {C_BOLD}/help{C_END}    - Show detailed agency instructions")
+    print(f" {C_BOLD}exit{C_END}     - Terminate swarm session\n")
+
     while True:
         try:
-            inp = input("\n[You] > ").strip()
+            # Colorized Agency Prompt
+            inp = input(f"{C_PURPLE}{C_BOLD}[Agency]{C_END} {C_CYAN}> {C_END}").strip()
             if not inp: continue
             if inp.lower() in ['exit', 'quit']: break
             if inp.lower() == 'heartbeat': heartbeat_daemon(api_key); continue
@@ -681,9 +718,9 @@ def interactive_loop(api_key):
                 img_path = os.path.expanduser(parts[1].strip())
                 if os.path.exists(img_path):
                     images = [img_path]
-                    inp = input("[Prompt for Image] > ").strip()
+                    inp = input(f"{C_YELLOW}[Attach Message]{C_END} > ").strip()
                 else:
-                    print(f"Error: Image not found at {img_path}")
+                    status("ERROR", f"Image not found at {img_path}", C_RED)
                     continue
 
             if inp.startswith("/disable "):
@@ -692,23 +729,32 @@ def interactive_loop(api_key):
             if inp.startswith("/enable "):
                 print(toggle_feature(inp.split(" ", 1)[1].strip(), enable=True))
                 continue
+            
             if inp.lower() == "/config":
+                divider("SYSTEM CONFIGURATION")
                 print(json.dumps(read_local_config(), indent=4))
+                divider()
                 continue
+                
             if inp.lower() == "/help":
-                print("\n[Help] GeminiMAS Interactive Shell")
-                print("/config          - View local machine configuration")
-                print("/enable [name]   - Enable a disabled feature")
-                print("/disable [name]  - Disable a feature locally (without deleting code)")
-                print("heartbeat        - Start the heartbeat daemon manually")
-                print("exit/quit        - Close the shell\n")
+                divider("AGENCY HELP")
+                print(f"{C_BOLD}How to use the Swarm:{C_END}")
+                print(f"1. Describe your client project (e.g., 'Build a coffee shop site').")
+                print(f"2. The {C_PURPLE}AgencyLead{C_END} will define the requirements.")
+                print(f"3. The {C_BLUE}Architect{C_END} will plan specialized tasks.")
+                print(f"4. The {C_GREEN}Developers{C_END} will execute code in parallel.")
+                print(f"5. A {C_CYAN}Reviewer{C_END} will verify the project integrity.")
+                divider()
                 continue
 
-            print("\n[Agent] > ", end="", flush=True)
-            for chunk in mas.process(inp, stream=True):
+            print(f"\n{C_BLUE}{C_BOLD}[Agent]{C_END} {C_CYAN}> {C_END}", end="", flush=True)
+            for chunk in mas.process(inp, stream=True, images=images):
                 print(chunk, end="", flush=True)
             print("\n")
+            
         except KeyboardInterrupt: break
+        except Exception as e:
+            status("SHELL_ERR", str(e), C_RED)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GeminiMAS Core Engine')
     subparsers = parser.add_subparsers(dest='command')
