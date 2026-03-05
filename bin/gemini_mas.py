@@ -25,6 +25,7 @@ SOUL_FILE = os.path.join(AGENT_ROOT, "core/SOUL.md")
 HEARTBEAT_FILE = os.path.join(AGENT_ROOT, "core/HEARTBEAT.md")
 CHAT_LOG = os.path.join(AGENT_ROOT, "logs/chat_history.jsonl")
 LOCAL_CONFIG = os.path.join(AGENT_ROOT, "core/local_config.json")
+CURRENT_PROJECT_FILE = os.path.join(AGENT_ROOT, "core/current_project.txt")
 SKILLS_DIR = os.path.join(AGENT_ROOT, "skills")
 KNOWLEDGE_DIR = os.path.join(AGENT_ROOT, "knowledge")
 
@@ -367,7 +368,14 @@ class GeminiMAS:
         self.client_pro = GeminiClient(api_key, self.pro_model)
         self.db = Persistence(api_key)
         self.history = []
+        
+        # Persistent Project Context
         self.current_project = "default"
+        if os.path.exists(CURRENT_PROJECT_FILE):
+            try:
+                with open(CURRENT_PROJECT_FILE, 'r') as f: self.current_project = f.read().strip() or "default"
+            except: pass
+
         if os.path.exists(CHAT_LOG):
             with open(CHAT_LOG, 'r') as f:
                 for l in f.readlines()[-6:]: self.history.append(json.loads(l))
@@ -737,6 +745,9 @@ def interactive_loop(api_key):
             if inp.startswith("/project "):
                 new_p = inp.split(" ", 1)[1].strip().lower().replace(" ", "_")
                 mas.current_project = new_p
+                # Persist for other processes (like TG)
+                os.makedirs(os.path.dirname(CURRENT_PROJECT_FILE), exist_ok=True)
+                with open(CURRENT_PROJECT_FILE, 'w') as f: f.write(new_p)
                 status("PROJECT", f"Switched workspace to: {new_p.upper()}", C_PURPLE)
                 continue
 

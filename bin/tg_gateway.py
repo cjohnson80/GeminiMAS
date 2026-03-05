@@ -104,6 +104,37 @@ async def route_to_machine(target_name, command, update):
 
     await status_msg.edit_text(f"[{MY_HOSTNAME}] Timeout: {target_name} did not respond. Check its heartbeat.")
 
+CURRENT_PROJECT_FILE = os.path.join(os.path.expanduser('~/gemini_agents/core'), 'current_project.txt')
+WORKSPACE_DIR = os.path.expanduser('~/gemini_agents/workspace')
+
+async def project_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update): return
+    if not context.args:
+        # Show current project if no name provided
+        curr = "default"
+        if os.path.exists(CURRENT_PROJECT_FILE):
+            with open(CURRENT_PROJECT_FILE, 'r') as f: curr = f.read().strip()
+        await update.message.reply_text(f"📁 Current Project: {curr.upper()}")
+        return
+
+    new_p = context.args[0].lower().replace(" ", "_")
+    os.makedirs(os.path.dirname(CURRENT_PROJECT_FILE), exist_ok=True)
+    with open(CURRENT_PROJECT_FILE, 'w') as f: f.write(new_p)
+    await update.message.reply_text(f"✅ Switched workspace to: {new_p.upper()}")
+
+async def list_projects(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update): return
+    if not os.path.exists(WORKSPACE_DIR):
+        await update.message.reply_text("No projects found.")
+        return
+    
+    projects = [p for p in os.listdir(WORKSPACE_DIR) if os.path.isdir(os.path.join(WORKSPACE_DIR, p))]
+    if not projects:
+        await update.message.reply_text("No projects found.")
+    else:
+        resp = "📂 Active Agency Projects:\n" + "\n".join([f"• {p}" for p in projects])
+        await update.message.reply_text(resp)
+
 async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update): return
     branch_name = context.args[0] if context.args else "main"
@@ -219,6 +250,8 @@ async def main():
     await log_identity()
 
     app.add_handler(CommandHandler("approve", approve_command))
+    app.add_handler(CommandHandler("project", project_command))
+    app.add_handler(CommandHandler("projects", list_projects))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
