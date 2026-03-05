@@ -168,81 +168,110 @@ class ResourceGuard:
                 return (avail / total) < 0.15
         except: return False
 
+class Spinner:
+    def __init__(self, message="Working", color=C_CYAN):
+        self.message = message
+        self.color = color
+        self.stop_event = threading.Event()
+        self.thread = None
+        self.start_time = time.time()
+
+    def _spin(self):
+        chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        i = 0
+        while not self.stop_event.is_set():
+            elapsed = int(time.time() - self.start_time)
+            print(f"\r{self.color}{chars[i % len(chars)]}{C_END} {C_DIM}{self.message}... ({elapsed}s){C_END}", end="", flush=True)
+            time.sleep(0.1)
+            i += 1
+
+    def __enter__(self):
+        self.thread = threading.Thread(target=self._spin)
+        self.thread.daemon = True
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop_event.set()
+        if self.thread: self.thread.join()
+        print("\r" + " " * 60 + "\r", end="", flush=True)
+
 class ToolBox:
     @staticmethod
     def execute(action, payload):
         try:
-            if action == "run_shell":
-                res = subprocess.run(payload, shell=True, capture_output=True, text=True, timeout=120)
-                return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
-            elif action == "web_search":
-                # Basic search proxy using DuckDuckGo
-                status("SEARCH", f"Searching for: {payload}...", C_BLUE)
-                search_url = f"https://duckduckgo.com/html/?q={urllib.parse.quote(payload)}"
-                req = urllib.request.Request(search_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    return response.read().decode('utf-8', errors='replace')[:15000]
-            elif action == "verify_project":
-                # Superior Intelligent Tool: Actually check the code for errors
-                target_dir = os.path.expanduser(payload)
-                if not os.path.isdir(target_dir):
-                    return f"Error: {target_dir} is not a directory."
-                
-                status("VERIFY", f"Checking project integrity at {target_dir}...", C_YELLOW)
-                
-                checks = []
-                # Only add checks if relevant config files exist
-                if os.path.exists(os.path.join(target_dir, "package.json")):
-                    checks.append(("Linting", "npm run lint"))
-                if os.path.exists(os.path.join(target_dir, "tsconfig.json")):
-                    checks.append(("TypeScript", "npx tsc --noEmit"))
-                
-                # Default fallback: Python syntax check if no JS/TS found
-                python_files = [f for f in os.listdir(target_dir) if f.endswith('.py')]
-                if not checks and python_files:
-                    checks.append(("Python Syntax", f"python3 -m py_compile {' '.join(python_files)}"))
+            with Spinner(f"Executing {action}"):
+                if action == "run_shell":
+                    res = subprocess.run(payload, shell=True, capture_output=True, text=True, timeout=120)
+                    return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+                elif action == "web_search":
+                    # Basic search proxy using DuckDuckGo
+                    status("SEARCH", f"Searching for: {payload}...", C_BLUE)
+                    search_url = f"https://duckduckgo.com/html/?q={urllib.parse.quote(payload)}"
+                    req = urllib.request.Request(search_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=15) as response:
+                        return response.read().decode('utf-8', errors='replace')[:15000]
+                elif action == "verify_project":
+                    # Superior Intelligent Tool: Actually check the code for errors
+                    target_dir = os.path.expanduser(payload)
+                    if not os.path.isdir(target_dir):
+                        return f"Error: {target_dir} is not a directory."
+                    
+                    status("VERIFY", f"Checking project integrity at {target_dir}...", C_YELLOW)
+                    
+                    checks = []
+                    # Only add checks if relevant config files exist
+                    if os.path.exists(os.path.join(target_dir, "package.json")):
+                        checks.append(("Linting", "npm run lint"))
+                    if os.path.exists(os.path.join(target_dir, "tsconfig.json")):
+                        checks.append(("TypeScript", "npx tsc --noEmit"))
+                    
+                    # Default fallback: Python syntax check if no JS/TS found
+                    python_files = [f for f in os.listdir(target_dir) if f.endswith('.py')]
+                    if not checks and python_files:
+                        checks.append(("Python Syntax", f"python3 -m py_compile {' '.join(python_files)}"))
 
-                if not checks:
-                    return "No specific project configuration found (package.json/tsconfig.json). Skipping advanced verification."
+                    if not checks:
+                        return "No specific project configuration found (package.json/tsconfig.json). Skipping advanced verification."
 
-                results = []
-                for name, cmd in checks:
-                    try:
-                        status("VERIFY", f"Running {name}...", C_YELLOW)
-                        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=target_dir, timeout=60)
-                        if res.returncode != 0:
-                            results.append(f"{name} Failed:\n{res.stderr[:1000]}")
-                    except subprocess.TimeoutExpired:
-                        results.append(f"{name} Timed Out (60s).")
-                    except Exception as e:
-                        results.append(f"{name} Error: {str(e)}")
-                
-                return "Project is clean!" if not results else "\n".join(results)
-            elif action == "fetch_url":
-                req = urllib.request.Request(payload, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    return response.read().decode('utf-8')[:10000]
-            elif action == "read_file":
-                with open(os.path.expanduser(payload), 'r') as f: return f.read()
-            elif action == "write_file":
-                if isinstance(payload, str):
-                    try: data = json.loads(payload)
-                    except: return "Error: payload must be JSON for write_file"
-                else: data = payload
-                os.makedirs(os.path.dirname(os.path.expanduser(data['path'])), exist_ok=True)
-                with open(os.path.expanduser(data['path']), 'w') as f: f.write(data['content'])
-                return f"Successfully wrote to {data['path']}"
-            elif action == "notify_telegram":
-                bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-                chat_id = os.getenv("TELEGRAM_USER_ID")
-                if not bot_token or not chat_id: return "Telegram credentials missing."
-                url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-                # Truncate payload to Telegram's limit (~4096)
-                safe_payload = str(payload)[:4000]
-                req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Evolution Protocol]\n{safe_payload}"}).encode(), headers={"Content-Type": "application/json"})
-                urllib.request.urlopen(req)
-                return "Telegram notification sent."
-            return "Unknown tool."
+                    results = []
+                    for name, cmd in checks:
+                        try:
+                            status("VERIFY", f"Running {name}...", C_YELLOW)
+                            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=target_dir, timeout=60)
+                            if res.returncode != 0:
+                                results.append(f"{name} Failed:\n{res.stderr[:1000]}")
+                        except subprocess.TimeoutExpired:
+                            results.append(f"{name} Timed Out (60s).")
+                        except Exception as e:
+                            results.append(f"{name} Error: {str(e)}")
+                    
+                    return "Project is clean!" if not results else "\n".join(results)
+                elif action == "fetch_url":
+                    req = urllib.request.Request(payload, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=15) as response:
+                        return response.read().decode('utf-8')[:10000]
+                elif action == "read_file":
+                    with open(os.path.expanduser(payload), 'r') as f: return f.read()
+                elif action == "write_file":
+                    if isinstance(payload, str):
+                        try: data = json.loads(payload)
+                        except: return "Error: payload must be JSON for write_file"
+                    else: data = payload
+                    os.makedirs(os.path.dirname(os.path.expanduser(data['path'])), exist_ok=True)
+                    with open(os.path.expanduser(data['path']), 'w') as f: f.write(data['content'])
+                    return f"Successfully wrote to {data['path']}"
+                elif action == "notify_telegram":
+                    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+                    chat_id = os.getenv("TELEGRAM_USER_ID")
+                    if not bot_token or not chat_id: return "Telegram credentials missing."
+                    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                    # Truncate payload to Telegram's limit (~4096)
+                    safe_payload = str(payload)[:4000]
+                    req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Evolution Protocol]\n{safe_payload}"}).encode(), headers={"Content-Type": "application/json"})
+                    urllib.request.urlopen(req)
+                    return "Telegram notification sent."
+                return "Unknown tool."
         except Exception as e: return f"Tool Error: {str(e)}"
 
 class GeminiClient:
@@ -276,15 +305,16 @@ class GeminiClient:
 
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                    headers={"Content-Type": "application/json"}, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=120) as response:
-                result = json.loads(response.read().decode("utf-8"))
-                return result['candidates'][0]['content']['parts'][0]['text']
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8")
-            return f"API Error {e.code}: {err_body}"
-        except Exception as e:
-            return f"Error: {str(e)}"
+        with Spinner(f"AI Brain Thinking ({self.model})"):
+            try:
+                with urllib.request.urlopen(req, timeout=120) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                    return result['candidates'][0]['content']['parts'][0]['text']
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8")
+                return f"API Error {e.code}: {err_body}"
+            except Exception as e:
+                return f"Error: {str(e)}"
 
     def generate_stream(self, prompt, system_instruction=None, history=None, images=None):
         url = f"{self.base_url}{self.model}:streamGenerateContent?key={self.api_key}"
@@ -310,17 +340,24 @@ class GeminiClient:
 
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                    headers={"Content-Type": "application/json"}, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=120) as response:
+        
+        with Spinner(f"Connecting to AI Swarm ({self.model})"):
+            try:
+                response = urllib.request.urlopen(req, timeout=120)
                 raw_data = response.read().decode("utf-8")
-                chunks = json.loads(raw_data)
-                for chunk in chunks:
-                    yield chunk['candidates'][0]['content']['parts'][0]['text']
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8")
-            yield f"API Error {e.code}: {err_body}"
+            except urllib.error.HTTPError as e:
+                yield f"API Error {e.code}: {e.read().decode('utf-8')}"
+                return
+            except Exception as e:
+                yield f"Error: {str(e)}"
+                return
+
+        try:
+            chunks = json.loads(raw_data)
+            for chunk in chunks:
+                yield chunk['candidates'][0]['content']['parts'][0]['text']
         except Exception as e:
-            yield f"Error: {str(e)}"
+            yield f"Error parsing stream: {str(e)}"
 
     def embed(self, text):
         url = f"{self.base_url}gemini-embedding-001:embedContent?key={self.api_key}"
@@ -811,14 +848,12 @@ def interactive_loop(api_key):
                 continue
 
             # Process prompt
-            print(f"\n{C_BLUE}{C_BOLD}[Agent]{C_END} {C_CYAN}Drafting...{C_END}", end="\r", flush=True)
             full_response = ""
             for chunk in mas.process(inp, stream=True, images=images):
                 full_response += chunk
             
-            # Clear drafting line and show rendered output
-            print(" " * 20, end="\r")
-            print(f"{C_BLUE}{C_BOLD}[Agent]{C_END} {C_CYAN}> {C_END}")
+            # Show rendered output
+            print(f"\n{C_BLUE}{C_BOLD}[Agent]{C_END} {C_CYAN}> {C_END}")
             print(render_markdown(full_response))
             print("\n")
             
