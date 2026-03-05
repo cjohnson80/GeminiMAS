@@ -132,16 +132,39 @@ class ToolBox:
                 return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
             elif action == "verify_project":
                 # Superior Intelligent Tool: Actually check the code for errors
-                status("VERIFY", f"Checking project integrity at {payload}...", C_YELLOW)
-                checks = [
-                    ("Linting", "npm run lint"),
-                    ("TypeScript", "npx tsc --noEmit")
-                ]
+                target_dir = os.path.expanduser(payload)
+                if not os.path.isdir(target_dir):
+                    return f"Error: {target_dir} is not a directory."
+                
+                status("VERIFY", f"Checking project integrity at {target_dir}...", C_YELLOW)
+                
+                checks = []
+                # Only add checks if relevant config files exist
+                if os.path.exists(os.path.join(target_dir, "package.json")):
+                    checks.append(("Linting", "npm run lint"))
+                if os.path.exists(os.path.join(target_dir, "tsconfig.json")):
+                    checks.append(("TypeScript", "npx tsc --noEmit"))
+                
+                # Default fallback: Python syntax check if no JS/TS found
+                python_files = [f for f in os.listdir(target_dir) if f.endswith('.py')]
+                if not checks and python_files:
+                    checks.append(("Python Syntax", f"python3 -m py_compile {' '.join(python_files)}"))
+
+                if not checks:
+                    return "No specific project configuration found (package.json/tsconfig.json). Skipping advanced verification."
+
                 results = []
                 for name, cmd in checks:
-                    res = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=payload)
-                    if res.returncode != 0:
-                        results.append(f"{name} Failed:\n{res.stderr[:1000]}")
+                    try:
+                        status("VERIFY", f"Running {name}...", C_YELLOW)
+                        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=target_dir, timeout=60)
+                        if res.returncode != 0:
+                            results.append(f"{name} Failed:\n{res.stderr[:1000]}")
+                    except subprocess.TimeoutExpired:
+                        results.append(f"{name} Timed Out (60s).")
+                    except Exception as e:
+                        results.append(f"{name} Error: {str(e)}")
+                
                 return "Project is clean!" if not results else "\n".join(results)
             elif action == "fetch_url":
                 req = urllib.request.Request(payload, headers={'User-Agent': 'Mozilla/5.0'})
@@ -162,7 +185,9 @@ class ToolBox:
                 chat_id = os.getenv("TELEGRAM_USER_ID")
                 if not bot_token or not chat_id: return "Telegram credentials missing."
                 url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-                req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Evolution Protocol]\n{payload}"}).encode(), headers={"Content-Type": "application/json"})
+                # Truncate payload to Telegram's limit (~4096)
+                safe_payload = str(payload)[:4000]
+                req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Evolution Protocol]\n{safe_payload}"}).encode(), headers={"Content-Type": "application/json"})
                 urllib.request.urlopen(req)
                 return "Telegram notification sent."
             return "Unknown tool."
@@ -475,11 +500,15 @@ CRITICAL INSTRUCTIONS:
 
         def worker(step, sys_instr, results_so_far, q, imgs):
             role = step.get('role', 'Developer')
-            status("START", f"Task {step['id']} assigned to {role}: {step['task'][:100]}...", C_GREEN)
-            res = self.run_worker_with_tools(step['task'], str(results_so_far), sys_instr, role=role, images=imgs)
-            q.put((step['id'], res))
-            with open(os.path.join(session_dir, f"task_{step['id']}_{role}.md"), 'w') as f: f.write(res)
-            status("FINISH", f"Task {step['id']} ({role}) completed successfully.", C_GREEN)
+            try:
+                status("START", f"Task {step['id']} assigned to {role}: {step['task'][:100]}...", C_GREEN)
+                res = self.run_worker_with_tools(step['task'], str(results_so_far), sys_instr, role=role, images=imgs)
+                q.put((step['id'], res))
+                with open(os.path.join(session_dir, f"task_{step['id']}_{role}.md"), 'w') as f: f.write(res)
+                status("FINISH", f"Task {step['id']} ({role}) completed successfully.", C_GREEN)
+            except Exception as e:
+                status("ERROR", f"Task {step['id']} ({role}) crashed: {str(e)}", C_RED)
+                q.put((step['id'], f"CRASH ERROR: {str(e)}"))
 
         for step in plan:
             is_parallel = step.get('parallel', False)
@@ -488,10 +517,12 @@ CRITICAL INSTRUCTIONS:
 
             if is_parallel:
                 t = threading.Thread(target=worker, args=(step, sys_instr, dict(results), q, images))
+                t.daemon = True
                 t.start()
                 threads.append(t)
             else:
-                for t in threads: t.join()
+                # Wait for previous group with timeout
+                for t in threads: t.join(timeout=900) # 15 min timeout per parallel group
                 while not q.empty():
                     tid, tres = q.get(); results[tid] = tres
                 threads = []
@@ -500,7 +531,8 @@ CRITICAL INSTRUCTIONS:
                 while not q.empty():
                     tid, tres = q.get(); results[tid] = tres
 
-        for t in threads: t.join()
+        # Final join with timeout
+        for t in threads: t.join(timeout=900)
         while not q.empty():
             tid, tres = q.get(); results[tid] = tres
 
