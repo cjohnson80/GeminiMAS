@@ -121,6 +121,12 @@ EOF
 echo "[*] Writing Heartbeat file..."
 cat << 'EOF' > "$AGENT_ROOT/core/HEARTBEAT.md"
 # Active Goals
+- [ ] **RESEARCH SWARM (24h):** Researches latest AI updates and Next.js/TS patterns. 
+      1. Use AIScout to research LLM/Agentic trends.
+      2. Use FrameworkScout to research Next.js/TypeScript best practices.
+      3. Save findings to knowledge/ folder.
+      4. Use CoreEvolver to propose code upgrades to the repository.
+
 - [ ] **EVOLUTION PROTOCOL (GLOBAL):** Examine your source code in \`$REPO_ROOT/bin/\`. Invent a new lightweight feature or optimization for ALL machines.
       1. Use \`run_shell\` to \`cd $REPO_ROOT\`.
       2. Create a unique branch: \`git checkout -b evolution-\$CURRENT_MACHINE-$(date +%s)\`.
