@@ -44,12 +44,16 @@ def probe_system_defaults():
     
     # Celeron / Low-Resource Logic
     if mem_gb < 4 or cpu_count <= 2:
-        return {"max_threads": 2, "cache_size": "256MB", "profile": "low-resource"}
+        res = {"max_threads": 2, "cache_size": "256MB", "profile": "low-resource"}
     # High-End Logic
-    if mem_gb > 16:
-        return {"max_threads": max(4, cpu_count), "cache_size": "2GB", "profile": "high-performance"}
+    elif mem_gb > 16:
+        res = {"max_threads": max(4, cpu_count), "cache_size": "2GB", "profile": "high-performance"}
     # Standard Logic
-    return {"max_threads": min(4, cpu_count), "cache_size": "512MB", "profile": "standard"}
+    else:
+        res = {"max_threads": min(4, cpu_count), "cache_size": "512MB", "profile": "standard"}
+    
+    res.update({"cpu_count": cpu_count, "mem_gb": round(mem_gb, 2)})
+    return res
 
 def read_local_config():
     sys_defaults = probe_system_defaults()
@@ -68,6 +72,8 @@ def read_local_config():
             # Ensure keys exist
             for k, v in default_cfg.items():
                 if k not in cfg: cfg[k] = v
+            # Record the current probe results for context injection
+            cfg["_current_probe"] = sys_defaults
             return cfg
     except: return default_cfg
 
@@ -322,7 +328,19 @@ class GeminiMAS:
     def get_system_context(self):
         soul = read_file_safe(SOUL_FILE)
         local_cfg = read_local_config()
-        return f"{soul}\n\nCURRENT_MACHINE: {self.machine_name}\nLOCAL_HARDWARE_CONFIG: {json.dumps(local_cfg)}\n"
+        # Inject the VERIFIED hardware report into the heart of the agent's prompt
+        # This prevents the AI from hallucinating a different machine profile.
+        hw = local_cfg.get("_current_probe", {})
+        hw_report = f"""
+[VERIFIED_HARDWARE_REPORT]
+- MACHINE_NAME: {self.machine_name}
+- CPU_CORES: {hw.get('cpu_count', 'Unknown')}
+- RAM_TOTAL: {hw.get('mem_gb', 'Unknown')} GB
+- ASSIGNED_PROFILE: {hw.get('profile', 'standard')}
+- MAX_THREADS: {local_cfg.get('max_threads')}
+- DISABLED_FEATURES: {json.dumps(local_cfg.get('disabled_features', []))}
+"""
+        return f"{soul}\n{hw_report}\n"
 
     def triage(self, user_input):
         prompt = f"Analyze: '{user_input}'. Is this a casual CHAT or a TASK that requires coding/tools/system changes? Reply ONLY 'CHAT' or 'TASK'."
