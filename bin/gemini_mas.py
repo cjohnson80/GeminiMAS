@@ -315,8 +315,9 @@ class GeminiMAS:
     def __init__(self, api_key):
         self.api_key = api_key
         self.machine_name = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
-        self.lite_model = "gemini-1.5-flash"
-        self.pro_model = "gemini-1.5-pro"
+        # Verified v1beta model IDs with high quotas
+        self.lite_model = "gemini-flash-lite-latest"
+        self.pro_model = "gemini-3-pro-preview"
         self.client_lite = GeminiClient(api_key, self.lite_model)
         self.client_pro = GeminiClient(api_key, self.pro_model)
         self.db = Persistence(api_key)
