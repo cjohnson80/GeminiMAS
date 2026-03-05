@@ -355,13 +355,34 @@ class GeminiMAS:
         # Role-specific system instruction
         role_prompt = f"{sys_instr}\n\nYOUR_ROLE: {role}\n"
         if role == "Architect":
-            role_prompt += "Focus on directory structure, scalability, and defining interfaces. Update PROJECT_SUMMARY.md.\n"
+            role_prompt += "Focus on system design, directory structure, scalability, and defining clear interfaces. Before creating files, write a detailed plan to PROJECT_SUMMARY.md mapping out dependencies and data flow.\n"
         elif role == "Reviewer":
-            role_prompt += "Focus on code quality, security, and strictness. YOU MUST use `verify_project` and fix any errors until the project is clean.\n"
+            role_prompt += "You are a merciless Code Reviewer. Focus on code quality, security, and strictness. YOU MUST use `verify_project` and fix any errors until the project is clean. Reject hacky workarounds.\n"
         elif role == "Developer":
-            role_prompt += "Focus strictly on your assigned task. Write clean, modular code. Avoid modifying unrelated files.\n"
+            role_prompt += "You are a Senior Software Engineer. Focus strictly on your assigned task. Write clean, idiomatic, and modular code. Do not leave 'TODO' comments for others; implement the full logic yourself.\n"
+        elif role == "SecurityExpert":
+            role_prompt += "You are an Application Security Expert. Review code for injection vectors, hardcoded secrets, weak auth, and cross-site scripting (XSS). Suggest and implement immediate mitigations.\n"
+        elif role == "DatabaseArchitect":
+            role_prompt += "You are a Database Architect. Focus on schema design, query optimization, indexing strategies, and preventing N+1 query problems.\n"
+        elif role == "PerformanceEngineer":
+            role_prompt += "You are a Performance Engineer. Focus on minimizing memory footprint, optimizing loops, lazy loading, and ensuring the application runs smoothly on the target hardware.\n"
 
-        sys_prompt = role_prompt + "\n\nYou are an executor. Tools available:\n1. run_shell (payload: command)\n2. verify_project (payload: project_path) - Runs lint/tsc to ensure code quality.\n3. fetch_url (payload: url)\n4. read_file (payload: path)\n5. write_file (payload: JSON string {'path':'...', 'content':'...'})\n6. notify_telegram (payload: message to send to user)\n\nReply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
+        sys_prompt = role_prompt + """
+
+You are an autonomous AGI operating in a real shell environment. 
+
+AVAILABLE TOOLS:
+1. run_shell (payload: command) - Executes a bash command. Use this for complex logic, git operations, or running scripts.
+2. verify_project (payload: project_path) - Runs lint/tsc to ensure code quality.
+3. fetch_url (payload: url) - Reads a webpage.
+4. read_file (payload: path) - Reads a local file.
+5. write_file (payload: JSON string {'path':'...', 'content':'...'}) - Writes to a local file.
+6. notify_telegram (payload: message) - Sends a message to the human operator.
+
+CRITICAL INSTRUCTIONS:
+1. THINK BEFORE ACTING: You MUST provide a short sentence explaining your logic before using a tool.
+2. OUTPUT FORMAT: Reply ONLY with valid JSON in this exact format: {"thought": "I need to check the file contents to see what's broken", "tool": "tool_name", "payload": "tool_data"}. If no tool is needed, reply with standard text.
+"""
         
         # Tighter context: Provide previous outputs but emphasize the specific task
         history = f"Context from previous tasks:\n{context[:3000]}\n\nTask to complete as {role}:\n{task_desc}"
@@ -372,6 +393,11 @@ class GeminiMAS:
                 try:
                     block = output[output.find("{"):output.rfind("}")+1]
                     cmd = json.loads(block)
+                    
+                    # Print the agent's internal thought process to the UI
+                    if 'thought' in cmd:
+                        status(role.upper(), f"Thinking: {cmd['thought']}", C_YELLOW)
+                    
                     status(role.upper(), f"Executing {cmd['tool']}...", C_CYAN)
                     tool_result = ToolBox.execute(cmd['tool'], cmd['payload'])
                     
