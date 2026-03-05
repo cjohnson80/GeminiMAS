@@ -194,18 +194,27 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     token = os.getenv('TELEGRAM_BOT_TOKEN')
+    if not token:
+        print("CRITICAL: TELEGRAM_BOT_TOKEN not set!")
+        sys.exit(1)
 
     listener = setup_async_logger()
 
     app = ApplicationBuilder().token(token).build()
+    
+    # Get bot info to display identity
+    async def log_identity():
+        bot = await app.bot.get_me()
+        logger.info(f"Gateway started. Bot: @{bot.username} | Host: {MY_HOSTNAME} | Focus: {get_focus()}")
+    
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(log_identity())
+
     app.add_handler(CommandHandler("approve", approve_command))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    logger.info(f"Gateway started on {MY_HOSTNAME}. Focus: {get_focus()}")
-
     # Run polling and watchdog
-    loop = asyncio.get_event_loop()
     watchdog = loop.create_task(celeron_watchdog())
 
     try:
