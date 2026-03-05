@@ -26,6 +26,7 @@ HEARTBEAT_FILE = os.path.join(AGENT_ROOT, "core/HEARTBEAT.md")
 CHAT_LOG = os.path.join(AGENT_ROOT, "logs/chat_history.jsonl")
 LOCAL_CONFIG = os.path.join(AGENT_ROOT, "core/local_config.json")
 SKILLS_DIR = os.path.join(AGENT_ROOT, "skills")
+KNOWLEDGE_DIR = os.path.join(AGENT_ROOT, "knowledge")
 
 # Threading Lock for DB
 db_lock = threading.Lock()
@@ -130,6 +131,13 @@ class ToolBox:
             if action == "run_shell":
                 res = subprocess.run(payload, shell=True, capture_output=True, text=True, timeout=120)
                 return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+            elif action == "web_search":
+                # Basic search proxy using DuckDuckGo
+                status("SEARCH", f"Searching for: {payload}...", C_BLUE)
+                search_url = f"https://duckduckgo.com/html/?q={urllib.parse.quote(payload)}"
+                req = urllib.request.Request(search_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    return response.read().decode('utf-8', errors='replace')[:15000]
             elif action == "verify_project":
                 # Superior Intelligent Tool: Actually check the code for errors
                 target_dir = os.path.expanduser(payload)
@@ -391,6 +399,12 @@ class GeminiMAS:
             role_prompt += "You are a Database Architect. Focus on schema design, query optimization, indexing strategies, and preventing N+1 query problems.\n"
         elif role == "PerformanceEngineer":
             role_prompt += "You are a Performance Engineer. Focus on minimizing memory footprint, optimizing loops, lazy loading, and ensuring the application runs smoothly on the target hardware.\n"
+        elif role == "AIScout":
+            role_prompt += "You are an AI Research Agent. Your goal is to find the latest updates in LLMs, agentic workflows, and AI optimization that can be applied to this system.\n"
+        elif role == "FrameworkScout":
+            role_prompt += "You are a Framework Specialist. Research the latest Next.js coding standards, TypeScript policies, and best practices for creating scalable agents.\n"
+        elif role == "CoreEvolver":
+            role_prompt += "You are the Self-Evolution Architect. Read the research from AIScout and FrameworkScout in the KNOWLEDGE_DIR and apply those improvements to my core code.\n"
 
         sys_prompt = role_prompt + """
 
@@ -400,9 +414,10 @@ AVAILABLE TOOLS:
 1. run_shell (payload: command) - Executes a bash command. Use this for complex logic, git operations, or running scripts.
 2. verify_project (payload: project_path) - Runs lint/tsc to ensure code quality.
 3. fetch_url (payload: url) - Reads a webpage.
-4. read_file (payload: path) - Reads a local file.
-5. write_file (payload: JSON string {'path':'...', 'content':'...'}) - Writes to a local file.
-6. notify_telegram (payload: message) - Sends a message to the human operator.
+4. web_search (payload: query) - Search for latest information on a topic.
+5. read_file (payload: path) - Reads a local file.
+6. write_file (payload: JSON string {'path':'...', 'content':'...'}) - Writes to a local file.
+7. notify_telegram (payload: message) - Sends a message to the human operator.
 
 CRITICAL INSTRUCTIONS:
 1. THINK BEFORE ACTING: You MUST provide a short sentence explaining your logic before using a tool.
@@ -576,16 +591,32 @@ CRITICAL INSTRUCTIONS:
 def heartbeat_daemon(api_key):
     mas = GeminiMAS(api_key)
     print(f"\n[!] Heartbeat Daemon Started v{__version__} (Evolution Mode + Distributed Listener)")
+    os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
 
     repo_path = os.path.expanduser('~/GeminiMAS_Repo')
     mailbox_path = os.path.join(repo_path, 'mailbox')
+    last_research_file = os.path.join(AGENT_ROOT, "core/last_research.txt")
 
     while True:
         try:
             # Sync with Repo
             subprocess.run(f"cd {repo_path} && git pull origin main", shell=True, capture_output=True)
 
-            # 1. Check for Mailbox Commands
+            # 1. Autonomous Research Cycle (Once every 24h)
+            now = time.time()
+            last_research = 0
+            if os.path.exists(last_research_file):
+                try:
+                    with open(last_research_file, 'r') as f: last_research = float(f.read().strip() or 0)
+                except: pass
+            
+            if (now - last_research) > 86400:
+                print(f"\n[Pulse] Starting Autonomous Research Swarm...")
+                research_goal = f"Research latest AI agent patterns and Next.js/TS coding standards. Store findings in {KNOWLEDGE_DIR} and then use CoreEvolver to propose improvements to gemini_mas.py."
+                for _ in mas.process(research_goal, stream=True): pass
+                with open(last_research_file, 'w') as f: f.write(str(now))
+
+            # 2. Check for Mailbox Commands
             cmd_file = os.path.join(mailbox_path, f"{mas.machine_name}_cmd.json")
             if os.path.exists(cmd_file):
                 print(f"\n[Mail] Received remote command...")
