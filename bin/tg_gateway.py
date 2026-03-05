@@ -47,8 +47,23 @@ def set_focus(name):
     with open(FOCUS_FILE, 'w') as f: json.dump({'focused_machine': name}, f)
 
 def is_authorized(update: Update):
-    if not ALLOWED_USER_ID: return True
-    return str(update.effective_user.id) == str(ALLOWED_USER_ID)
+    if not ALLOWED_USER_ID:
+        logger.critical("SECURITY CRITICAL: TELEGRAM_USER_ID not set in .env! Refusing all commands for safety.")
+        return False
+    
+    user_id = str(update.effective_user.id)
+    if user_id != str(ALLOWED_USER_ID):
+        logger.warning(f"UNAUTHORIZED ACCESS ATTEMPT: User {user_id} (@{update.effective_user.username}) tried to message the bot.")
+        return False
+    return True
+
+def is_safe_command(command):
+    """Basic sandbox to prevent catastrophic commands."""
+    blacklist = ["rm -rf /", ":(){ :|:& };:"]
+    for forbidden in blacklist:
+        if forbidden in command:
+            return False
+    return True
 
 async def route_to_machine(target_name, command, update):
     """Mails a command to another machine via Git."""
@@ -96,7 +111,14 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update): return
+    if not update.message or not update.message.text: return
     text = update.message.text
+
+    # Security check for shell-injection or risky commands
+    if not is_safe_command(text):
+        await update.message.reply_text("❌ SECURITY ALERT: High-risk command blocked by gateway.")
+        logger.error(f"BLOCKED RISKY COMMAND: {text}")
+        return
 
     # Check for focus shift
     target_machine = get_focus()
@@ -117,9 +139,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 proc = await asyncio.create_subprocess_exec(sys.executable, mas_path, '--prompt', text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
-                response = stdout.decode().strip() or f"Error: {stderr.decode()}"
+                
+                # Robust decoding and truncation
+                out_str = stdout.decode('utf-8', errors='replace').strip()
+                err_str = stderr.decode('utf-8', errors='replace').strip()
+                
+                response = out_str or f"Error: {err_str}"
+                if not response: response = "Core engine returned empty response."
+                
                 await status_msg.edit_text(response[:4096])
-            except Exception as e: await status_msg.edit_text(f"Error: {str(e)}")
+            except Exception as e:
+                import traceback
+                logger.error(f"Error handling message: {e}\n{traceback.format_exc()}")
+                if status_msg:
+                    await status_msg.edit_text(f"Error: {str(e)}")
     else:
         # Route to another machine
         await route_to_machine(target_machine, text, update)
@@ -144,9 +177,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
-            response = stdout.decode().strip() or f"Error: {stderr.decode()}"
+            
+            # Robust decoding and truncation
+            out_str = stdout.decode('utf-8', errors='replace').strip()
+            err_str = stderr.decode('utf-8', errors='replace').strip()
+            
+            response = out_str or f"Error: {err_str}"
+            if not response: response = "Core engine returned empty response."
+            
             await status_msg.edit_text(response[:4096])
-        except Exception as e: await status_msg.edit_text(f"Error: {str(e)}")
+        except Exception as e:
+            import traceback
+            logger.error(f"Error handling photo: {e}\n{traceback.format_exc()}")
+            if status_msg:
+                await status_msg.edit_text(f"Error: {str(e)}")
 
 if __name__ == '__main__':
     token = os.getenv('TELEGRAM_BOT_TOKEN')
