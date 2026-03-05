@@ -1,1 +1,14 @@
-{"max_threads": 2, "cache_size": "512MB", "model_overrides": {}, "disabled_features": ["heavy_vector_search", "realtime_audio_processing", "high_res_image_analysis"]}
+{
+    "max_threads": 2,
+    "cache_size": "512MB",
+    "model_overrides": {},
+    "disabled_features": [
+        "heavy_vector_search",
+        "realtime_audio_processing",
+        "high_res_image_analysis"
+    ],
+    "gc_tuning": {
+        "threshold": [150, 5, 5],
+        "watchdog_rss_limit_mb": 200
+    }
+}

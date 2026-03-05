@@ -5,16 +5,26 @@ import logging
 import sys
 import json
 import time
+import psutil
+import gc
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
+from logger_setup import setup_async_logger
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename=os.path.expanduser('~/gemini_agents/logs/tg_gateway.log')
-)
-logger = logging.getLogger(__name__)
+# Configure logging
+logger = logging.getLogger('TG_GATEWAY')
+
+async def celeron_watchdog(threshold_mb=150, check_interval_sec=30):
+    process = psutil.Process(os.getpid())
+    while True:
+        try:
+            rss_mb = process.memory_info().rss / (1024 * 1024)
+            if rss_mb > threshold_mb:
+                logger.warning(f'[WATCHDOG] High Memory: {rss_mb:.2f}MB. Forcing GC.')
+                gc.collect()
+            await asyncio.sleep(check_interval_sec)
+        except asyncio.CancelledError:
+            break
 
 # Distributed Config
 REPO_PATH = os.path.expanduser('~/GeminiMAS_Repo')
@@ -140,9 +150,22 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     token = os.getenv('TELEGRAM_BOT_TOKEN')
+
+    listener = setup_async_logger()
+
     app = ApplicationBuilder().token(token).build()
     app.add_handler(CommandHandler("approve", approve_command))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+
     logger.info(f"Gateway started on {MY_HOSTNAME}. Focus: {get_focus()}")
-    app.run_polling()
+
+    # Run polling and watchdog
+    loop = asyncio.get_event_loop()
+    watchdog = loop.create_task(celeron_watchdog())
+
+    try:
+        app.run_polling()
+    finally:
+        watchdog.cancel()
+        listener.stop()
