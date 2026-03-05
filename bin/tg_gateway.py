@@ -158,19 +158,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_machine = get_focus()
     if ":" in text and len(text.split(":")[0].split()) == 1:
         prefix = text.split(":")[0].strip().lower()
-        # We'll assume any single-word prefix before a colon might be a machine name
-        # If it's a known machine or you address it, we shift focus
         target_machine = prefix
         text = text.split(":", 1)[1].strip()
         set_focus(target_machine)
         logger.info(f"Focus shifted to: {target_machine}")
 
     if target_machine == MY_HOSTNAME.lower() or target_machine == MY_HOSTNAME:
-        # Process locally
-        status_msg = await update.message.reply_text(f"[{MY_HOSTNAME}] Thinking...")
+        # Get project name for context
+        curr_p = "default"
+        if os.path.exists(CURRENT_PROJECT_FILE):
+            with open(CURRENT_PROJECT_FILE, 'r') as f: curr_p = f.read().strip()
+            
+        # Process locally with activity feedback
+        status_msg = await update.message.reply_text(f"[{MY_HOSTNAME}] 🧠 Swarm Working on '{curr_p.upper()}'...")
+        
         async with semaphore:
+            # Start background "typing" status
+            typing_task = asyncio.create_task(context.bot.send_chat_action(chat_id=update.effective_message.chat_id, action="typing"))
+            
             try:
-                # Prefer the gagent wrapper for machine-specific path resolution
                 cmd_executable = "gagent" if subprocess.run(["which", "gagent"], capture_output=True).returncode == 0 else sys.executable
                 
                 if cmd_executable == "gagent":
@@ -178,7 +184,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     mas_path = os.path.expanduser('~/gemini_agents/bin/gemini_mas.py')
                     proc = await asyncio.create_subprocess_exec(sys.executable, mas_path, '--prompt', text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+                
+                # Keep sending "typing" while proc runs
+                while proc.returncode is None:
+                    await context.bot.send_chat_action(chat_id=update.effective_message.chat_id, action="typing")
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=4.0)
+                    except asyncio.TimeoutError:
+                        continue
+
+                stdout, stderr = await proc.communicate()
                 
                 # Robust decoding and truncation
                 out_str = stdout.decode('utf-8', errors='replace').strip()
@@ -193,6 +208,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Error handling message: {e}\n{traceback.format_exc()}")
                 if status_msg:
                     await status_msg.edit_text(f"Error: {str(e)}")
+            finally:
+                typing_task.cancel()
     else:
         # Route to another machine
         await route_to_machine(target_machine, text, update)
