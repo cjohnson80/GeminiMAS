@@ -336,14 +336,18 @@ class GeminiMAS:
         # Role-specific system instruction
         role_prompt = f"{sys_instr}\n\nYOUR_ROLE: {role}\n"
         if role == "Architect":
-            role_prompt += "Focus on directory structure, scalability, and defining interfaces.\n"
+            role_prompt += "Focus on directory structure, scalability, and defining interfaces. Update PROJECT_SUMMARY.md.\n"
         elif role == "Reviewer":
-            role_prompt += "Focus on code quality, security, TypeScript strictness, and Next.js best practices.\n"
+            role_prompt += "Focus on code quality, security, and strictness. YOU MUST use `verify_project` and fix any errors until the project is clean.\n"
+        elif role == "Developer":
+            role_prompt += "Focus strictly on your assigned task. Write clean, modular code. Avoid modifying unrelated files.\n"
 
         sys_prompt = role_prompt + "\n\nYou are an executor. Tools available:\n1. run_shell (payload: command)\n2. verify_project (payload: project_path) - Runs lint/tsc to ensure code quality.\n3. fetch_url (payload: url)\n4. read_file (payload: path)\n5. write_file (payload: JSON string {'path':'...', 'content':'...'})\n6. notify_telegram (payload: message to send to user)\n\nReply ONLY with JSON: {'tool': 'name', 'payload': 'data'} OR reply with final text if no tool is needed."
-        history = f"Context from previous tasks:\n{context}\n\nTask to complete as {role}:\n{task_desc}"
+        
+        # Tighter context: Provide previous outputs but emphasize the specific task
+        history = f"Context from previous tasks:\n{context[:3000]}\n\nTask to complete as {role}:\n{task_desc}"
 
-        for attempt in range(5):
+        for attempt in range(8):
             output = self.client_lite.generate(history, system_instruction=sys_prompt, images=images)
             if output and "{" in output and ("'tool'" in output.replace('"', "'") or '"tool"' in output):
                 try:
@@ -351,10 +355,16 @@ class GeminiMAS:
                     cmd = json.loads(block)
                     status(role.upper(), f"Executing {cmd['tool']}...", C_CYAN)
                     tool_result = ToolBox.execute(cmd['tool'], cmd['payload'])
+                    
+                    # Formal Critique Loop
+                    if cmd['tool'] == 'verify_project' and "Failed:" in tool_result:
+                        status("CRITIQUE", "Verification failed. Forcing fix loop...", C_RED)
+                        tool_result += "\n\n[SYSTEM CRITIQUE] Tests failed! You must fix the code that caused these errors and run verify_project again until it passes."
+
                     # Smart Context Management: If output is huge, summarize it
                     if len(tool_result) > 2000:
                         status("SUMMARY", f"Summarizing large tool output ({len(tool_result)} chars)...", C_YELLOW)
-                        tool_result = self.client_lite.generate(f"Summarize this tool output for an agent: {tool_result[:8000]}")
+                        tool_result = self.client_lite.generate(f"Summarize this tool output for an agent focusing on errors/results: {tool_result[:8000]}")
 
                     history += f"\n\nTool Output:\n{tool_result}\nAnalyze this and continue."
                 except Exception as e: history += f"\n\nTool parse error: {str(e)}."
@@ -369,7 +379,7 @@ class GeminiMAS:
             final_history = history + f"\n\nSENIOR_DEBUGGER_ADVICE: {advice}\nExecute the task one last time using this advice."
             return self.client_lite.generate(final_history, system_instruction=sys_prompt, images=images)
 
-        return f"Task failed after 5 attempts and Senior Debugger consultation."
+        return f"Task failed after 8 attempts and Senior Debugger consultation."
 
     def solve_task(self, user_goal, images=None):
         past = self.db.semantic_search(user_goal)
@@ -377,18 +387,24 @@ class GeminiMAS:
         session_dir = os.path.join(WORKSPACE, timestamp)
         os.makedirs(session_dir, exist_ok=True)
 
-        # Shared context file for agents to collaborate
         scratchpad_path = os.path.join(session_dir, "PROJECT_SUMMARY.md")
-        with open(scratchpad_path, "w") as f:
-            f.write(f"# Project Scratchpad\n\nGoal: {user_goal}\n\n## Structure\n(To be defined by Architect)\n")
-
-        status("PLAN", "Collaborative Planning initiated...", C_BLUE)
+        
+        # 1. Product Manager Phase
+        status("PM", "Defining Acceptance Criteria...", C_BLUE)
         sys_instr = self.get_system_context()
-        prompt = (f"Goal: {user_goal}\nPast Context: {past}\n"
+        pm_prompt = f"Goal: {user_goal}\nPast Context: {past}\nYou are the Product Manager. Write clear, testable Acceptance Criteria for this goal. Output only the markdown text."
+        ac_text = self.client_pro.generate(pm_prompt, system_instruction=sys_instr, images=images)
+        
+        with open(scratchpad_path, "w") as f:
+            f.write(f"# Project Scratchpad\n\nGoal: {user_goal}\n\n## Acceptance Criteria\n{ac_text}\n\n## Architecture\n(To be defined by Architect)\n")
+
+        # 2. Architect Phase (Planning)
+        status("PLAN", "Collaborative Planning initiated...", C_BLUE)
+        prompt = (f"Goal: {user_goal}\nAcceptance Criteria: {ac_text}\n"
                   f"Plan 1-6 tasks using specialized agents. JSON format: [{{'id':1, 'role':'Architect|Developer|Reviewer', 'task':'...', 'parallel': false}}].\n"
                   f"- Use an Architect first to define structure in {scratchpad_path}.\n"
                   f"- Use Developers for implementation.\n"
-                  f"- Use Reviewers to verify critical code.\n"
+                  f"- Use a Reviewer at the end to verify code and fix errors.\n"
                   f"- Set 'parallel': true only for independent tasks.")
 
         plan_raw = self.client_pro.generate(prompt, system_instruction=sys_instr, json_mode=True, images=images)
