@@ -45,9 +45,9 @@ def probe_system_defaults():
     # Celeron / Low-Resource Logic
     if mem_gb < 4 or cpu_count <= 2:
         res = {"max_threads": 2, "cache_size": "256MB", "profile": "low-resource"}
-    # High-End Logic
-    elif mem_gb > 16:
-        res = {"max_threads": max(4, cpu_count), "cache_size": "2GB", "profile": "high-performance"}
+    # High-End Logic (Adjusted for 8GB+ machines)
+    elif mem_gb >= 8:
+        res = {"max_threads": cpu_count, "cache_size": "2GB", "profile": "high-performance"}
     # Standard Logic
     else:
         res = {"max_threads": min(4, cpu_count), "cache_size": "512MB", "profile": "standard"}
@@ -417,14 +417,16 @@ class GeminiMAS:
         with open(scratchpad_path, "w") as f:
             f.write(f"# Project Scratchpad\n\nGoal: {user_goal}\n\n## Acceptance Criteria\n{ac_text}\n\n## Architecture\n(To be defined by Architect)\n")
 
-        # 2. Architect Phase (Planning)
+        # 2. Architect Phase (Deep Planning)
         status("PLAN", "Collaborative Planning initiated...", C_BLUE)
         prompt = (f"Goal: {user_goal}\nAcceptance Criteria: {ac_text}\n"
-                  f"Plan 1-6 tasks using specialized agents. JSON format: [{{'id':1, 'role':'Architect|Developer|Reviewer', 'task':'...', 'parallel': false}}].\n"
+                  f"Plan 3-15 tasks using a swarm of specialized experts. JSON format: [{{'id':1, 'role':'Role', 'task':'...', 'parallel': false}}].\n"
+                  f"Available Roles: Architect, Developer, Reviewer, SecurityExpert, DatabaseArchitect, DocumentationLead, PerformanceEngineer.\n"
                   f"- Use an Architect first to define structure in {scratchpad_path}.\n"
-                  f"- Use Developers for implementation.\n"
+                  f"- Break large goals into multiple Developer tasks.\n"
+                  f"- Use specialized experts (Security, DB) for critical components.\n"
                   f"- Use a Reviewer at the end to verify code and fix errors.\n"
-                  f"- Set 'parallel': true only for independent tasks.")
+                  f"- Set 'parallel': true for independent tasks to leverage my {hw.get('cpu_count', 4)} CPU threads.")
 
         # Quota-aware generation
         plan_raw = self.client_pro.generate(prompt, system_instruction=sys_instr, json_mode=True, images=images)
