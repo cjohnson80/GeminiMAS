@@ -445,6 +445,10 @@ CRITICAL INSTRUCTIONS:
 
         # 2. Architect Phase (Deep Planning)
         status("PLAN", "Collaborative Planning initiated...", C_BLUE)
+        local_cfg = read_local_config()
+        hw = local_cfg.get("_current_probe", {})
+        cpu_threads = hw.get("cpu_count", 4)
+        
         prompt = (f"Goal: {user_goal}\nAcceptance Criteria: {ac_text}\n"
                   f"Plan 3-15 tasks using a swarm of specialized experts. JSON format: [{{'id':1, 'role':'Role', 'task':'...', 'parallel': false}}].\n"
                   f"Available Roles: Architect, Developer, Reviewer, SecurityExpert, DatabaseArchitect, DocumentationLead, PerformanceEngineer.\n"
@@ -452,7 +456,7 @@ CRITICAL INSTRUCTIONS:
                   f"- Break large goals into multiple Developer tasks.\n"
                   f"- Use specialized experts (Security, DB) for critical components.\n"
                   f"- Use a Reviewer at the end to verify code and fix errors.\n"
-                  f"- Set 'parallel': true for independent tasks to leverage my {hw.get('cpu_count', 4)} CPU threads.")
+                  f"- Set 'parallel': true for independent tasks to leverage my {cpu_threads} CPU threads.")
 
         # Quota-aware generation
         plan_raw = self.client_pro.generate(prompt, system_instruction=sys_instr, json_mode=True, images=images)
