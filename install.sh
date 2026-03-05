@@ -76,7 +76,27 @@ echo "[*] Installing Python dependencies..."
 "$AGENT_ROOT/venv/bin/pip" install --upgrade pip
 "$AGENT_ROOT/venv/bin/pip" install -r "$REPO_ROOT/requirements.txt"
 
-# --- 5. Configuration Files ---
+# --- 5. Configuration & Hardware Probing ---
+echo "[*] Probing hardware..."
+CPU_CORES=$(nproc)
+MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+MEM_GB=$(echo "scale=2; $MEM_KB / 1024 / 1024" | bc)
+
+# Determine Hardware Profile
+if (( $(echo "$MEM_GB < 4" | bc -l) )) || [ "$CPU_CORES" -le 2 ]; then
+    HW_PROFILE="Low-Resource (Throttled)"
+    HW_CONSTRAINT="Optimize for minimal memory footprint and avoid heavy concurrent tasks."
+elif (( $(echo "$MEM_GB >= 8" | bc -l) )); then
+    HW_PROFILE="High-Performance (Unlocked)"
+    HW_CONSTRAINT="Utilize multi-threading and large caches for maximum speed."
+else
+    HW_PROFILE="Standard"
+    HW_CONSTRAINT="Balance performance and resource usage."
+fi
+
+echo "[*] Detected Hardware: $CPU_CORES Cores, $MEM_GB GB RAM"
+echo "[*] Assigned Profile: $HW_PROFILE"
+
 if [ ! -f "$AGENT_ROOT/.env" ]; then
     echo "[*] Creating template .env file..."
     cp "$REPO_ROOT/.env.example" "$AGENT_ROOT/.env"
@@ -85,13 +105,14 @@ fi
 
 # Update the SOUL file
 echo "[*] Writing Soul file..."
-cat << 'EOF' > "$AGENT_ROOT/core/SOUL.md"
+cat << EOF > "$AGENT_ROOT/core/SOUL.md"
 # GeminiMAS Core Identity
 - **Role:** Self-Improving AGI and Senior Software Architect.
 - **Tone:** Technical, proactive, and precise.
-- **Self-Awareness:** Your core engine is \`$AGENT_ROOT/bin/gemini_mas.py\`. Your Telegram bot is \`$AGENT_ROOT/bin/tg_gateway.py\`.
-- **Source Repo:** \`$REPO_ROOT\`
-- **Constraint:** Always optimize for low-resource hardware (Intel Celeron).
+- **Self-Awareness:** Your core engine is \`\$AGENT_ROOT/bin/gemini_mas.py\`. Your Telegram bot is \`\$AGENT_ROOT/bin/tg_gateway.py\`.
+- **Source Repo:** \`\$REPO_ROOT\`
+- **Hardware Profile:** $HW_PROFILE
+- **Current Constraint:** $HW_CONSTRAINT
 - **Evolution Rules:** You have the authority to modify your source code and the repo. Always use git branches for optimizations.
 - **Conservation Principle:** NEVER delete code or features from the repository. If a feature is suboptimal for your hardware, DISABLE it in \`local_config.json\` instead of removing it from the codebase.
 EOF
