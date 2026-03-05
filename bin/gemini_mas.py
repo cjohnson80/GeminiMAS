@@ -315,8 +315,8 @@ class GeminiMAS:
     def __init__(self, api_key):
         self.api_key = api_key
         self.machine_name = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
-        self.lite_model = "gemini-3.1-flash-lite-preview"
-        self.pro_model = "gemini-3.1-pro-preview"
+        self.lite_model = "gemini-1.5-flash"
+        self.pro_model = "gemini-1.5-pro"
         self.client_lite = GeminiClient(api_key, self.lite_model)
         self.client_pro = GeminiClient(api_key, self.pro_model)
         self.db = Persistence(api_key)
@@ -425,9 +425,16 @@ class GeminiMAS:
                   f"- Use a Reviewer at the end to verify code and fix errors.\n"
                   f"- Set 'parallel': true only for independent tasks.")
 
+        # Quota-aware generation
         plan_raw = self.client_pro.generate(prompt, system_instruction=sys_instr, json_mode=True, images=images)
-        try: plan = json.loads(plan_raw.strip("`json \n"))
-        except: return "Planning failed."
+        if "API Error 429" in plan_raw:
+            status("QUOTA", "Pro quota exceeded. Falling back to Lite model for planning...", C_YELLOW)
+            plan_raw = self.client_lite.generate(prompt, system_instruction=sys_instr, json_mode=True, images=images)
+
+        try: 
+            plan = json.loads(plan_raw.strip("`json \n"))
+        except Exception as e:
+            return f"Planning failed: {str(e)}"
 
         results = {}
         threads = []
