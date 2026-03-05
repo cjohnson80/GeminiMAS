@@ -122,6 +122,37 @@ def divider(title=""):
         side = (width - len(title) - 2) // 2
         print(f"\n{C_DIM}{'-' * side}{C_END} {C_BOLD}{title}{C_END} {C_DIM}{'-' * side}{C_END}")
 
+def render_markdown(text):
+    """Simple terminal markdown renderer."""
+    import re
+    # Headers
+    text = re.sub(r'^### (.*)$', f"\n{C_PURPLE}{C_BOLD}# \\1{C_END}", text, flags=re.MULTILINE)
+    text = re.sub(r'^## (.*)$', f"\n{C_BLUE}{C_BOLD}## \\1{C_END}", text, flags=re.MULTILINE)
+    text = re.sub(r'^# (.*)$', f"\n{C_CYAN}{C_BOLD}### \\1{C_END}", text, flags=re.MULTILINE)
+    
+    # Bold / Italic
+    text = re.sub(r'\*\*(.*?)\*\*', f"{C_BOLD}\\1{C_END}", text)
+    text = re.sub(r'\*(.*?)\*', f"{C_ITALIC}\\1{C_END}", text)
+    
+    # Lists
+    text = re.sub(r'^- (.*)$', f"  {C_CYAN}•{C_END} \\1", text, flags=re.MULTILINE)
+    text = re.sub(r'^\d+\. (.*)$', f"  {C_YELLOW}\\0{C_END}", text, flags=re.MULTILINE)
+
+    # Code Blocks (Basic)
+    lines = text.split('\n')
+    in_code = False
+    new_lines = []
+    for line in lines:
+        if line.strip().startswith('```'):
+            in_code = not in_code
+            new_lines.append(f"{C_DIM}{'='*40}{C_END}")
+            continue
+        if in_code:
+            new_lines.append(f"{C_GREEN}  {line}{C_END}")
+        else:
+            new_lines.append(line)
+    return '\n'.join(new_lines)
+
 def read_file_safe(path):
     if not os.path.exists(path): return ""
     with open(path, 'r') as f: return f.read()
@@ -779,9 +810,16 @@ def interactive_loop(api_key):
                 divider()
                 continue
 
-            print(f"\n{C_BLUE}{C_BOLD}[Agent]{C_END} {C_CYAN}> {C_END}", end="", flush=True)
+            # Process prompt
+            print(f"\n{C_BLUE}{C_BOLD}[Agent]{C_END} {C_CYAN}Drafting...{C_END}", end="\r", flush=True)
+            full_response = ""
             for chunk in mas.process(inp, stream=True, images=images):
-                print(chunk, end="", flush=True)
+                full_response += chunk
+            
+            # Clear drafting line and show rendered output
+            print(" " * 20, end="\r")
+            print(f"{C_BLUE}{C_BOLD}[Agent]{C_END} {C_CYAN}> {C_END}")
+            print(render_markdown(full_response))
             print("\n")
             
         except KeyboardInterrupt: break
