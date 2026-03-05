@@ -367,6 +367,7 @@ class GeminiMAS:
         self.client_pro = GeminiClient(api_key, self.pro_model)
         self.db = Persistence(api_key)
         self.history = []
+        self.current_project = "default"
         if os.path.exists(CHAT_LOG):
             with open(CHAT_LOG, 'r') as f:
                 for l in f.readlines()[-6:]: self.history.append(json.loads(l))
@@ -489,13 +490,16 @@ CRITICAL INSTRUCTIONS:
     def solve_task(self, user_goal, images=None):
         past = self.db.semantic_search(user_goal)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_dir = os.path.join(WORKSPACE, timestamp)
+        
+        # Organize by Project Name
+        project_dir = os.path.join(WORKSPACE, self.current_project)
+        session_dir = os.path.join(project_dir, timestamp)
         os.makedirs(session_dir, exist_ok=True)
 
         scratchpad_path = os.path.join(session_dir, "PROJECT_SUMMARY.md")
         
         # 1. Agency Lead Phase
-        divider("CLIENT SPECIFICATIONS")
+        divider(f"CLIENT SPECIFICATIONS [{self.current_project.upper()}]")
         status("LEAD", "Extracting requirements and defining Acceptance Criteria...", C_PURPLE)
         sys_instr = self.get_system_context()
         pm_prompt = f"Goal: {user_goal}\nPast Context: {past}\nYou are the AgencyLead. Write clear, testable Acceptance Criteria for this goal. Output only the markdown text."
@@ -730,6 +734,23 @@ def interactive_loop(api_key):
                 print(toggle_feature(inp.split(" ", 1)[1].strip(), enable=True))
                 continue
             
+            if inp.startswith("/project "):
+                new_p = inp.split(" ", 1)[1].strip().lower().replace(" ", "_")
+                mas.current_project = new_p
+                status("PROJECT", f"Switched workspace to: {new_p.upper()}", C_PURPLE)
+                continue
+
+            if inp.lower() == "/projects":
+                divider("ACTIVE AGENCY PROJECTS")
+                if not os.path.exists(WORKSPACE):
+                    print(" No projects found.")
+                else:
+                    for p in os.listdir(WORKSPACE):
+                        if os.path.isdir(os.path.join(WORKSPACE, p)):
+                            print(f" - {C_BOLD}{p}{C_END}")
+                divider()
+                continue
+
             if inp.lower() == "/config":
                 divider("SYSTEM CONFIGURATION")
                 print(json.dumps(read_local_config(), indent=4))
