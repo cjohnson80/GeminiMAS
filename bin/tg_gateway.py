@@ -9,6 +9,9 @@ import psutil
 import gc
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
+
+# Ensure local imports work
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from logger_setup import setup_async_logger
 
 # Configure logging
@@ -134,10 +137,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if target_machine == MY_HOSTNAME.lower() or target_machine == MY_HOSTNAME:
         # Process locally
         status_msg = await update.message.reply_text(f"[{MY_HOSTNAME}] Thinking...")
-        mas_path = os.path.expanduser('~/gemini_agents/bin/gemini_mas.py')
         async with semaphore:
             try:
-                proc = await asyncio.create_subprocess_exec(sys.executable, mas_path, '--prompt', text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                # Prefer the gagent wrapper for machine-specific path resolution
+                cmd_executable = "gagent" if subprocess.run(["which", "gagent"], capture_output=True).returncode == 0 else sys.executable
+                
+                if cmd_executable == "gagent":
+                    proc = await asyncio.create_subprocess_exec(cmd_executable, "--prompt", text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                else:
+                    mas_path = os.path.expanduser('~/gemini_agents/bin/gemini_mas.py')
+                    proc = await asyncio.create_subprocess_exec(sys.executable, mas_path, '--prompt', text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
                 
                 # Robust decoding and truncation
@@ -192,7 +201,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if status_msg:
                 await status_msg.edit_text(f"Error: {str(e)}")
 
-if __name__ == '__main__':
+async def main():
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not token:
         print("CRITICAL: TELEGRAM_BOT_TOKEN not set!")
@@ -207,18 +216,32 @@ if __name__ == '__main__':
         bot = await app.bot.get_me()
         logger.info(f"Gateway started. Bot: @{bot.username} | Host: {MY_HOSTNAME} | Focus: {get_focus()}")
     
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(log_identity())
+    await log_identity()
 
     app.add_handler(CommandHandler("approve", approve_command))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
     # Run polling and watchdog
-    watchdog = loop.create_task(celeron_watchdog())
+    watchdog = asyncio.create_task(celeron_watchdog())
 
     try:
-        app.run_polling()
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        
+        # Keep running until interrupted
+        while True:
+            await asyncio.sleep(1)
     finally:
         watchdog.cancel()
+        if app.updater: await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
         listener.stop()
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
