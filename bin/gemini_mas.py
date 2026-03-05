@@ -90,8 +90,17 @@ def write_local_config(config):
     with open(LOCAL_CONFIG, 'w') as f:
         json.dump(config, f, indent=4)
 
-def status(msg):
-    print(f"{msg}", end="", flush=True)
+# ANSI Colors
+C_BLUE = "\033[94m"
+C_CYAN = "\033[96m"
+C_GREEN = "\033[92m"
+C_YELLOW = "\033[93m"
+C_RED = "\033[91m"
+C_BOLD = "\033[1m"
+C_END = "\033[0m"
+
+def status(tag, msg, color=C_CYAN):
+    print(f"{color}{C_BOLD}[{tag}]{C_END} {msg}", flush=True)
 
 def read_file_safe(path):
     if not os.path.exists(path): return ""
@@ -117,7 +126,7 @@ class ToolBox:
                 return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
             elif action == "verify_project":
                 # Superior Intelligent Tool: Actually check the code for errors
-                status(f" [Verifying Code]...")
+                status("VERIFY", f"Checking project integrity at {payload}...", C_YELLOW)
                 checks = [
                     ("Linting", "npm run lint"),
                     ("TypeScript", "npx tsc --noEmit")
@@ -148,6 +157,10 @@ class ToolBox:
                 if not bot_token or not chat_id: return "Telegram credentials missing."
                 url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
                 req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Evolution Protocol]\n{payload}"}).encode(), headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req)
+                return "Telegram notification sent."
+            return "Unknown tool."
+        except Exception as e: return f"Tool Error: {str(e)}"
                 urllib.request.urlopen(req)
                 return "Telegram notification sent."
             return "Unknown tool."
@@ -321,23 +334,23 @@ class GeminiMAS:
                 try:
                     block = output[output.find("{"):output.rfind("}")+1]
                     cmd = json.loads(block)
-                    status(f" [{role}:{cmd['tool']}]...")
+                    status(role.upper(), f"Executing {cmd['tool']}...", C_CYAN)
                     tool_result = ToolBox.execute(cmd['tool'], cmd['payload'])
                     # Smart Context Management: If output is huge, summarize it
                     if len(tool_result) > 2000:
-                        status(" [Summarizing Large Output]...")
+                        status("SUMMARY", f"Summarizing large tool output ({len(tool_result)} chars)...", C_YELLOW)
                         tool_result = self.client_lite.generate(f"Summarize this tool output for an agent: {tool_result[:8000]}")
 
                     history += f"\n\nTool Output:\n{tool_result}\nAnalyze this and continue."
                 except Exception as e: history += f"\n\nTool parse error: {str(e)}."
             else: return output
 
-        status(f"\n[!] {role} Stuck. Consulting Senior Debugger...")
+        status("STUCK", f"{role} is failing to progress. Consulting Senior Debugger...", C_RED)
         # Context Compression for Senior Debugger
         brief_history = self.client_lite.generate(f"Summarize the attempts and failures so far to help a senior debugger: {history[-10000:]}")
         advice = self.client_pro.generate(f"Worker Role: {role} is stuck.\nDEBUG BRIEF:\n{brief_history}\n\nProvide an actionable fix or workaround.", system_instruction="You are a Senior Debugger. Help the worker get unstuck.")
         if advice:
-            status(" Advice received. Executing final attempt...")
+            status("ADVICE", f"Senior advice received. Executing final attempt for {role}...", C_GREEN)
             final_history = history + f"\n\nSENIOR_DEBUGGER_ADVICE: {advice}\nExecute the task one last time using this advice."
             return self.client_lite.generate(final_history, system_instruction=sys_prompt, images=images)
 
@@ -354,7 +367,7 @@ class GeminiMAS:
         with open(scratchpad_path, "w") as f:
             f.write(f"# Project Scratchpad\n\nGoal: {user_goal}\n\n## Structure\n(To be defined by Architect)\n")
 
-        status("[*] Collaborative Planning...")
+        status("PLAN", "Collaborative Planning initiated...", C_BLUE)
         sys_instr = self.get_system_context()
         prompt = (f"Goal: {user_goal}\nPast Context: {past}\n"
                   f"Plan 1-6 tasks using specialized agents. JSON format: [{{'id':1, 'role':'Architect|Developer|Reviewer', 'task':'...', 'parallel': false}}].\n"
@@ -373,15 +386,16 @@ class GeminiMAS:
 
         def worker(step, sys_instr, results_so_far, q, imgs):
             role = step.get('role', 'Developer')
+            status("START", f"Task {step['id']} assigned to {role}: {step['task'][:100]}...", C_GREEN)
             res = self.run_worker_with_tools(step['task'], str(results_so_far), sys_instr, role=role, images=imgs)
             q.put((step['id'], res))
             with open(os.path.join(session_dir, f"task_{step['id']}_{role}.md"), 'w') as f: f.write(res)
-            status(f" Task {step['id']} ({role}) Done.")
+            status("FINISH", f"Task {step['id']} ({role}) completed successfully.", C_GREEN)
 
         for step in plan:
             is_parallel = step.get('parallel', False)
             role = step.get('role', 'Developer')
-            status(f"\n[*] Spawning {role} for Task {step['id']} (Parallel: {is_parallel})...")
+            status("SPAWN", f"Deploying {role} (Step {step['id']}) [Parallel: {is_parallel}]", C_BLUE)
 
             if is_parallel:
                 t = threading.Thread(target=worker, args=(step, sys_instr, dict(results), q, images))
@@ -401,10 +415,11 @@ class GeminiMAS:
         while not q.empty():
             tid, tres = q.get(); results[tid] = tres
 
-        status(f"\n[*] Final Review...")
+        status("REVIEW", "Swarm tasks complete. Synthesizing final response...", C_BLUE)
         final = self.client_lite.generate(f"Goal: {user_goal}\nResults: {json.dumps(results)}\nFormat final summary.", system_instruction=sys_instr, images=images)
         with open(os.path.join(session_dir, "final_response.md"), 'w') as f: f.write(final)
         self.db.save_memory(user_goal, final[:1000])
+        status("COMPLETE", "Evolution cycle finished. Returning to prompt.", C_GREEN)
         return final
 
     def process(self, user_input, stream=False, images=None):
