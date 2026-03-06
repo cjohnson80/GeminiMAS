@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pending Approval Item Schema",
+  "type": "object",
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "description": "Unique identifier for the approval request."
+    },
+    "timestamp": {
+      "type": "integer",
+      "description": "Unix timestamp of request creation."
+    },
+    "proposer": {
+      "type": "string",
+      "description": "The component or module that initiated the request (e.g., gemini_mas)."
+    },
+    "action_type": {
+      "type": "string",
+      "enum": ["CODE_EXECUTION", "FILE_WRITE", "SYSTEM_CONFIG_CHANGE", "EXTERNAL_API_CALL"],
+      "description": "High-level category of the proposed action."
+    },
+    "proposed_payload": {
+      "type": "object",
+      "description": "The serialized data representing the exact operation (e.g., shell command, file path/content)."
+    },
+    "risk_score": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 10.0,
+      "description": "Calculated risk score (0.0 to 10.0)."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["PENDING", "APPROVED", "DENIED", "TIMED_OUT"],
+      "description": "Current state of the approval."
+    },
+    "expires_at": {
+      "type": "integer",
+      "description": "Unix timestamp when the request automatically expires if no response is received."
+    }
+  },
+  "required": ["request_id", "timestamp", "action_type", "proposed_payload", "risk_score", "status"]
+}

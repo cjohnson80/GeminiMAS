@@ -2,6 +2,7 @@ __version__ = '8.1.0'
 
 import json
 import os
+import re
 import urllib.request
 import urllib.error
 import sys
@@ -64,7 +65,9 @@ def read_local_config():
         "cache_size": sys_defaults["cache_size"],
         "profile": sys_defaults["profile"],
         "model_overrides": {},
-        "disabled_features": []
+        "disabled_features": [],
+        "evolution_interval_hrs": 4,
+        "heartbeat_sleep_sec": 5
     }
     if not os.path.exists(LOCAL_CONFIG):
         return default_cfg
@@ -98,6 +101,42 @@ def write_local_config(config):
     with open(LOCAL_CONFIG, 'w') as f:
         json.dump(config, f, indent=4)
 
+def rescan_hardware():
+    """Manually trigger a system probe and update configuration/soul files."""
+    sys_defaults = probe_system_defaults()
+    cfg = read_local_config()
+    
+    # Update core settings based on new hardware probe
+    cfg["max_threads"] = sys_defaults["max_threads"]
+    cfg["cache_size"] = sys_defaults["cache_size"]
+    cfg["profile"] = sys_defaults["profile"]
+    cfg["_current_probe"] = sys_defaults
+    write_local_config(cfg)
+    
+    # Update SOUL_FILE
+    hw_profile = sys_defaults["profile"]
+    if hw_profile == "low-resource":
+        hw_name = "Low-Resource (Throttled)"
+        hw_constraint = "Optimize for minimal memory footprint and avoid heavy concurrent tasks."
+    elif hw_profile == "high-performance":
+        hw_name = "High-Performance (Unlocked)"
+        hw_constraint = "Utilize multi-threading and large caches for maximum speed."
+    else:
+        hw_name = "Standard"
+        hw_constraint = "Balance performance and resource usage."
+
+    if os.path.exists(SOUL_FILE):
+        with open(SOUL_FILE, 'r') as f:
+            content = f.read()
+        
+        content = re.sub(r"- \*\*Hardware Profile:\*\* .*", f"- **Hardware Profile:** {hw_name}", content)
+        content = re.sub(r"- \*\*Current Constraint:\*\* .*", f"- **Current Constraint:** {hw_constraint}", content)
+        
+        with open(SOUL_FILE, 'w') as f:
+            f.write(content)
+            
+    return sys_defaults
+
 # ANSI Colors
 C_BLUE = "\033[94m"
 C_CYAN = "\033[96m"
@@ -105,25 +144,45 @@ C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
 C_RED = "\033[91m"
 C_PURPLE = "\033[95m"
+C_WHITE = "\033[97m"
 C_BOLD = "\033[1m"
 C_DIM = "\033[2m"
 C_ITALIC = "\033[3m"
+C_UNDERLINE = "\033[4m"
 C_END = "\033[0m"
+
+# Background Colors
+C_BG_BLUE = "\033[44m"
+C_BG_CYAN = "\033[46m"
+C_BG_MAGENTA = "\033[45m"
 
 def status(tag, msg, color=C_CYAN):
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"{C_DIM}[{ts}]{C_END} {color}{C_BOLD}[{tag:^8}]{C_END} {msg}", flush=True)
 
 def divider(title=""):
-    width = 60
+    width = 70
     if not title:
-        print(f"{C_DIM}{'-' * width}{C_END}")
+        print(f"{C_DIM}{'─' * width}{C_END}")
     else:
-        side = (width - len(title) - 2) // 2
-        print(f"\n{C_DIM}{'-' * side}{C_END} {C_BOLD}{title}{C_END} {C_DIM}{'-' * side}{C_END}")
+        side = (width - len(title) - 4) // 2
+        print(f"\n{C_DIM}{'─' * side}{C_END} {C_BOLD}{C_WHITE}{title}{C_END} {C_DIM}{'─' * side}{C_END}")
+
+def draw_box(content, title=None, color=C_CYAN, width=70):
+    """Draws a professional box around content."""
+    top = f"{color}╭{'─' * (width - 2)}╮{C_END}"
+    bottom = f"{color}╰{'─' * (width - 2)}╯{C_END}"
+    if title:
+        title_text = f" {C_BOLD}{title} {C_END}{color}"
+        top = f"{color}╭─{title_text}{'─' * (width - 4 - len(title))}╮{C_END}"
+    
+    print(top)
+    for line in content:
+        print(f"{color}│{C_END} {line:<{width-4}} {color}│{C_END}")
+    print(bottom)
 
 def render_markdown(text):
-    """Simple terminal markdown renderer."""
+    """Enhanced terminal markdown renderer."""
     import re
     # Headers
     text = re.sub(r'^### (.*)$', f"\n{C_PURPLE}{C_BOLD}# \\1{C_END}", text, flags=re.MULTILINE)
@@ -138,14 +197,15 @@ def render_markdown(text):
     text = re.sub(r'^- (.*)$', f"  {C_CYAN}•{C_END} \\1", text, flags=re.MULTILINE)
     text = re.sub(r'^\d+\. (.*)$', f"  {C_YELLOW}\\0{C_END}", text, flags=re.MULTILINE)
 
-    # Code Blocks (Basic)
+    # Code Blocks (Enhanced)
     lines = text.split('\n')
     in_code = False
     new_lines = []
     for line in lines:
         if line.strip().startswith('```'):
             in_code = not in_code
-            new_lines.append(f"{C_DIM}{'='*40}{C_END}")
+            border = f"{C_DIM}{'─'*68}{C_END}"
+            new_lines.append(border)
             continue
         if in_code:
             new_lines.append(f"{C_GREEN}  {line}{C_END}")
@@ -199,10 +259,41 @@ class Spinner:
 class ToolBox:
     @staticmethod
     def execute(action, payload):
+        def path_guard(path):
+            """Sanitize path to prevent absolute path escapes and enforce AGENT_ROOT."""
+            path = str(path).strip()
+            # If the agent uses absolute /workspace or /home, strip it and make relative to AGENT_ROOT
+            if path.startswith("/workspace/"):
+                path = path.replace("/workspace/", "workspace/", 1)
+            elif path.startswith(AGENT_ROOT + "/"):
+                path = path.replace(AGENT_ROOT + "/", "", 1)
+            elif path.startswith("/home/"):
+                # Very aggressive: strip the entire /home/user/gemini_agents/ part if present
+                if AGENT_ROOT in path:
+                    path = path.replace(AGENT_ROOT + "/", "", 1)
+                else:
+                    # If it's another user's home or root, block it
+                    path = path.lstrip("/")
+            
+            # Ensure it doesn't escape via ..
+            if ".." in path:
+                path = path.replace("..", ".")
+            
+            # Final path is always relative to AGENT_ROOT
+            return os.path.join(AGENT_ROOT, path.lstrip("/"))
+
         try:
             with Spinner(f"Executing {action}"):
                 if action == "run_shell":
-                    res = subprocess.run(payload, shell=True, capture_output=True, text=True, timeout=120)
+                    # For shell, we also want to ensure we're in AGENT_ROOT
+                    # We don't path_guard the whole payload as it's a command string, 
+                    # but we prepend a cd to be safe.
+                    cmd = f"cd {AGENT_ROOT} && {payload}"
+                    # Simple heuristic: if the agent tries to mkdir /workspace, we fix it in the string
+                    cmd = cmd.replace("mkdir -p /workspace/", f"mkdir -p {AGENT_ROOT}/workspace/")
+                    cmd = cmd.replace("mkdir /workspace/", f"mkdir {AGENT_ROOT}/workspace/")
+                    
+                    res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
                     return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
                 elif action == "web_search":
                     # Basic search proxy using DuckDuckGo
@@ -213,7 +304,7 @@ class ToolBox:
                         return response.read().decode('utf-8', errors='replace')[:15000]
                 elif action == "verify_project":
                     # Superior Intelligent Tool: Actually check the code for errors
-                    target_dir = os.path.expanduser(payload)
+                    target_dir = path_guard(payload)
                     if not os.path.isdir(target_dir):
                         return f"Error: {target_dir} is not a directory."
                     
@@ -252,14 +343,16 @@ class ToolBox:
                     with urllib.request.urlopen(req, timeout=15) as response:
                         return response.read().decode('utf-8')[:10000]
                 elif action == "read_file":
-                    with open(os.path.expanduser(payload), 'r') as f: return f.read()
+                    with open(path_guard(payload), 'r') as f: return f.read()
                 elif action == "write_file":
                     if isinstance(payload, str):
                         try: data = json.loads(payload)
                         except: return "Error: payload must be JSON for write_file"
                     else: data = payload
-                    os.makedirs(os.path.dirname(os.path.expanduser(data['path'])), exist_ok=True)
-                    with open(os.path.expanduser(data['path']), 'w') as f: f.write(data['content'])
+                    
+                    safe_path = path_guard(data['path'])
+                    os.makedirs(os.path.dirname(safe_path), exist_ok=True)
+                    with open(safe_path, 'w') as f: f.write(data['content'])
                     return f"Successfully wrote to {data['path']}"
                 elif action == "notify_telegram":
                     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -429,9 +522,15 @@ class GeminiMAS:
     def __init__(self, api_key):
         self.api_key = api_key
         self.machine_name = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
-        # Verified v1beta model IDs with high quotas
-        self.lite_model = "gemini-flash-lite-latest"
-        self.pro_model = "gemini-3-pro-preview"
+        
+        # Load local config for overrides
+        cfg = read_local_config()
+        overrides = cfg.get("model_overrides", {})
+
+        # Default model IDs (Updated for Feb 2026)
+        self.lite_model = overrides.get("lite", "gemini-3-flash-preview")
+        self.pro_model = overrides.get("pro", "gemini-3.1-pro-preview")
+        
         self.client_lite = GeminiClient(api_key, self.lite_model)
         self.client_pro = GeminiClient(api_key, self.pro_model)
         self.db = Persistence(api_key)
@@ -448,9 +547,21 @@ class GeminiMAS:
             with open(CHAT_LOG, 'r') as f:
                 for l in f.readlines()[-6:]: self.history.append(json.loads(l))
 
+    def get_directory_structure(self):
+        """Returns a concise tree representation of the workspace."""
+        try:
+            # Use find to get a max-depth list, excluding hidden folders/files
+            res = subprocess.run(
+                ["find", ".", "-maxdepth", "2", "-not", "-path", "*/.*"], 
+                capture_output=True, text=True, timeout=5
+            )
+            return res.stdout
+        except: return "Unable to retrieve directory structure."
+
     def get_system_context(self):
         soul = read_file_safe(SOUL_FILE)
         local_cfg = read_local_config()
+        dir_structure = self.get_directory_structure()
         # Inject the VERIFIED hardware report into the heart of the agent's prompt
         # This prevents the AI from hallucinating a different machine profile.
         hw = local_cfg.get("_current_probe", {})
@@ -462,6 +573,9 @@ class GeminiMAS:
 - ASSIGNED_PROFILE: {hw.get('profile', 'standard')}
 - MAX_THREADS: {local_cfg.get('max_threads')}
 - DISABLED_FEATURES: {json.dumps(local_cfg.get('disabled_features', []))}
+
+[WORKSPACE_DIRECTORY_STRUCTURE]
+{dir_structure}
 """
         return f"{soul}\n{hw_report}\n"
 
@@ -513,8 +627,13 @@ AVAILABLE TOOLS:
 3. fetch_url (payload: url) - Reads a webpage.
 4. web_search (payload: query) - Search for latest information on a topic.
 5. read_file (payload: path) - Reads a local file.
-6. write_file (payload: JSON string {'path':'...', 'content':'...'}) - Writes to a local file.
+6. write_file (payload: JSON string {"path":"...", "content":"..."}) - Writes to a local file.
 7. notify_telegram (payload: message) - Sends a message to the human operator.
+
+CRITICAL: Path Handling
+- ALWAYS use relative paths (e.g., 'workspace/my_project' instead of '/workspace/my_project').
+- Your working directory is always the agent root.
+- Never attempt to write to absolute paths outside of the provided structure.
 
 CRITICAL INSTRUCTIONS:
 1. THINK BEFORE ACTING: You MUST provide a short sentence explaining your logic before using a tool.
@@ -705,10 +824,14 @@ def heartbeat_daemon(api_key):
 
     while True:
         try:
+            cfg = read_local_config()
+            evolution_interval = cfg.get("evolution_interval_hrs", 4) * 3600
+            sleep_interval = cfg.get("heartbeat_sleep_sec", 5)
+
             # Sync with Repo
             subprocess.run(f"cd {repo_path} && git pull origin main", shell=True, capture_output=True)
 
-            # 1. Autonomous Research Cycle (Once every 24h)
+            # 1. Autonomous Research Cycle
             now = time.time()
             last_research = 0
             if os.path.exists(last_research_file):
@@ -716,7 +839,7 @@ def heartbeat_daemon(api_key):
                     with open(last_research_file, 'r') as f: last_research = float(f.read().strip() or 0)
                 except: pass
             
-            if (now - last_research) > 86400:
+            if (now - last_research) > evolution_interval:
                 print(f"\n[Pulse] Starting Autonomous Research Swarm...")
                 research_goal = f"Research latest AI agent patterns and Next.js/TS coding standards. Store findings in {KNOWLEDGE_DIR} and then use CoreEvolver to propose improvements to gemini_mas.py."
                 for _ in mas.process(research_goal, stream=True): pass
@@ -755,7 +878,7 @@ def heartbeat_daemon(api_key):
                 # Consume the generator
                 for _ in mas.process(f"Execute the pending tasks in {HEARTBEAT_FILE}", stream=True): pass
 
-            time.sleep(10) # Fast check for commands
+            time.sleep(sleep_interval)
         except KeyboardInterrupt: break
         except Exception as e:
             print(f"Heartbeat Error: {e}")
@@ -767,26 +890,27 @@ def interactive_loop(api_key):
     hw = cfg.get("_current_probe", {})
     
     # Professional Agency Splash
-    print(f"\n{C_BLUE}{C_BOLD}="*60)
-    print(f"{C_CYAN}  GeminiMAS Elite Swarm v{__version__} | Agency Edition")
-    print(f"{C_BLUE}="*60)
-    print(f"{C_DIM}  NODE:     {C_END}{C_BOLD}{mas.machine_name}{C_END}")
-    print(f"{C_DIM}  PROFILE:  {C_END}{hw.get('profile', 'standard').upper()}")
-    print(f"{C_DIM}  THREADS:  {C_END}{cfg.get('max_threads', 1)} Parallel Workers")
-    print(f"{C_DIM}  MEMORY:   {C_END}{hw.get('mem_gb', '0')} GB Detected")
-    print(f"{C_BLUE}="*60 + f"{C_END}\n")
+    os.system('clear' if os.name == 'posix' else 'cls')
     
-    print(f"{C_YELLOW}Available Commands:{C_END}")
-    print(f" {C_BOLD}/config{C_END}  - View hardware & feature matrix")
-    print(f" {C_BOLD}/image{C_END}   - Attach image to the next prompt")
-    print(f" {C_BOLD}/enable{C_END}  - Re-activate a disabled feature")
-    print(f" {C_BOLD}/help{C_END}    - Show detailed agency instructions")
-    print(f" {C_BOLD}exit{C_END}     - Terminate swarm session\n")
+    draw_box([
+        f"{C_BOLD}{C_WHITE}GeminiMAS Elite Swarm v{__version__}{C_END}",
+        f"{C_DIM}Digital Agency Autonomy Protocol{C_END}",
+        "",
+        f"{C_CYAN}NODE:    {C_END}{mas.machine_name}",
+        f"{C_CYAN}PROFILE: {C_END}{hw.get('profile', 'standard').upper()}",
+        f"{C_CYAN}THREADS: {C_END}{cfg.get('max_threads', 1)} Workers",
+        f"{C_CYAN}MEMORY:  {C_END}{hw.get('mem_gb', '0')} GB",
+    ], title="AGENCY STATUS", color=C_BLUE)
+
+    print(f"\n{C_YELLOW}{C_BOLD}COMMANDS:{C_END}")
+    print(f" {C_CYAN}/config{C_END}  {C_DIM}System Matrix{C_END}  {C_CYAN}/rescan{C_END}  {C_DIM}HW Probe{C_END}  {C_CYAN}/help{C_END}    {C_DIM}Docs{C_END}")
+    print(f" {C_CYAN}/image{C_END}   {C_DIM}Attach Vision{C_END}  {C_CYAN}/projects{C_END} {C_DIM}List All{C_END}  {C_CYAN}exit{C_END}     {C_DIM}Quit{C_END}\n")
 
     while True:
         try:
-            # Colorized Agency Prompt
-            inp = input(f"{C_PURPLE}{C_BOLD}[Agency]{C_END} {C_CYAN}> {C_END}").strip()
+            # Modern λ Prompt
+            prompt_prefix = f"{C_GREEN}λ{C_END} {C_CYAN}{mas.current_project}{C_END}"
+            inp = input(f"{prompt_prefix} {C_BOLD}➜{C_END} ").strip()
             if not inp: continue
             if inp.lower() in ['exit', 'quit']: break
             if inp.lower() == 'heartbeat': heartbeat_daemon(api_key); continue
@@ -810,6 +934,14 @@ def interactive_loop(api_key):
                 print(toggle_feature(inp.split(" ", 1)[1].strip(), enable=True))
                 continue
             
+            if inp.lower() == "/rescan":
+                status("SYSTEM", "Re-probing hardware...", C_CYAN)
+                hw = rescan_hardware()
+                print(f" {C_GREEN}* Detected: {hw['cpu_count']} Cores, {hw['mem_gb']} GB RAM{C_END}")
+                print(f" {C_GREEN}* New Profile: {hw['profile'].upper()}{C_END}")
+                status("SUCCESS", "SOUL.md and local_config.json updated.", C_GREEN)
+                continue
+
             if inp.startswith("/project "):
                 new_p = inp.split(" ", 1)[1].strip().lower().replace(" ", "_")
                 mas.current_project = new_p
