@@ -258,41 +258,75 @@ class Spinner:
 
 class ToolBox:
     @staticmethod
+    def ask_approval(action, payload):
+        """Governance Layer: High-risk actions require human-in-the-loop approval."""
+        approval_file = os.path.join(AGENT_ROOT, "core/pending_approval.json")
+        req_id = str(int(time.time()))
+        
+        # Determine risk level
+        risk = "LOW"
+        if action == "run_shell" and any(cmd in payload for cmd in ["rm", "chmod", "chown", "mv"]):
+            risk = "HIGH"
+        elif action == "write_file" and "workspace" not in payload:
+            risk = "HIGH"
+        
+        if risk == "LOW":
+            return True # Auto-approve low risk
+            
+        status("GOVERNANCE", f"High-risk action paused for approval: {action}", C_YELLOW)
+        
+        # Send Telegram notification if configured
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_USER_ID")
+        if bot_token and chat_id:
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            msg = f"⚠️ *ACTION APPROVAL REQUIRED* ⚠️\n\n*Action:* `{action}`\n*Payload:* `{payload[:100]}`...\n\nReply `/approve` or `/reject` in the CLI."
+            try:
+                req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}).encode(), headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=5)
+            except: pass
+
+        # Write pending request
+        with open(approval_file, "w") as f:
+            json.dump({"id": req_id, "action": action, "payload": payload, "status": "PENDING"}, f)
+            
+        # Block until approved or rejected
+        while True:
+            try:
+                with open(approval_file, "r") as f:
+                    state = json.load(f)
+                if state["status"] == "APPROVED":
+                    os.remove(approval_file)
+                    return True
+                elif state["status"] == "REJECTED":
+                    os.remove(approval_file)
+                    return False
+            except: pass
+            time.sleep(2)
+
+    @staticmethod
     def execute(action, payload, db=None):
         def path_guard(path):
             """Sanitize path to prevent absolute path escapes and enforce AGENT_ROOT."""
             path = str(path).strip()
-            # If the agent uses absolute /workspace or /home, strip it and make relative to AGENT_ROOT
-            if path.startswith("/workspace/"):
-                path = path.replace("/workspace/", "workspace/", 1)
-            elif path.startswith(AGENT_ROOT + "/"):
-                path = path.replace(AGENT_ROOT + "/", "", 1)
+            if path.startswith("/workspace/"): path = path.replace("/workspace/", "workspace/", 1)
+            elif path.startswith(AGENT_ROOT + "/"): path = path.replace(AGENT_ROOT + "/", "", 1)
             elif path.startswith("/home/"):
-                # Very aggressive: strip the entire /home/user/gemini_agents/ part if present
-                if AGENT_ROOT in path:
-                    path = path.replace(AGENT_ROOT + "/", "", 1)
-                else:
-                    # If it's another user's home or root, block it
-                    path = path.lstrip("/")
-            
-            # Ensure it doesn't escape via ..
-            if ".." in path:
-                path = path.replace("..", ".")
-            
-            # Final path is always relative to AGENT_ROOT
+                if AGENT_ROOT in path: path = path.replace(AGENT_ROOT + "/", "", 1)
+                else: path = path.lstrip("/")
+            if ".." in path: path = path.replace("..", ".")
             return os.path.join(AGENT_ROOT, path.lstrip("/"))
+
+        # Governance Check
+        if not ToolBox.ask_approval(action, str(payload)):
+            return "Execution REJECTED by Human Operator."
 
         try:
             with Spinner(f"Executing {action}"):
                 if action == "run_shell":
-                    # For shell, we also want to ensure we're in AGENT_ROOT
-                    # We don't path_guard the whole payload as it's a command string, 
-                    # but we prepend a cd to be safe.
                     cmd = f"cd {AGENT_ROOT} && {payload}"
-                    # Simple heuristic: if the agent tries to mkdir /workspace, we fix it in the string
                     cmd = cmd.replace("mkdir -p /workspace/", f"mkdir -p {AGENT_ROOT}/workspace/")
                     cmd = cmd.replace("mkdir /workspace/", f"mkdir {AGENT_ROOT}/workspace/")
-                    
                     res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
                     return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
                 elif action == "save_muscle_memory":
@@ -301,51 +335,32 @@ class ToolBox:
                             if isinstance(payload, str): data = json.loads(payload)
                             else: data = payload
                             return db.save_muscle_memory(data['intent'], data['command'])
-                        except Exception as e:
-                            return f"Failed to parse payload for save_muscle_memory: {str(e)}"
+                        except Exception as e: return f"Failed to parse payload: {str(e)}"
                     return "Database connection not available."
                 elif action == "web_search":
-                    # Basic search proxy using DuckDuckGo
                     status("SEARCH", f"Searching for: {payload}...", C_BLUE)
                     search_url = f"https://duckduckgo.com/html/?q={urllib.parse.quote(payload)}"
                     req = urllib.request.Request(search_url, headers={'User-Agent': 'Mozilla/5.0'})
                     with urllib.request.urlopen(req, timeout=15) as response:
                         return response.read().decode('utf-8', errors='replace')[:15000]
                 elif action == "verify_project":
-                    # Superior Intelligent Tool: Actually check the code for errors
                     target_dir = path_guard(payload)
-                    if not os.path.isdir(target_dir):
-                        return f"Error: {target_dir} is not a directory."
-                    
+                    if not os.path.isdir(target_dir): return f"Error: {target_dir} is not a directory."
                     status("VERIFY", f"Checking project integrity at {target_dir}...", C_YELLOW)
-                    
                     checks = []
-                    # Only add checks if relevant config files exist
-                    if os.path.exists(os.path.join(target_dir, "package.json")):
-                        checks.append(("Linting", "npm run lint"))
-                    if os.path.exists(os.path.join(target_dir, "tsconfig.json")):
-                        checks.append(("TypeScript", "npx tsc --noEmit"))
-                    
-                    # Default fallback: Python syntax check if no JS/TS found
+                    if os.path.exists(os.path.join(target_dir, "package.json")): checks.append(("Linting", "npm run lint"))
+                    if os.path.exists(os.path.join(target_dir, "tsconfig.json")): checks.append(("TypeScript", "npx tsc --noEmit"))
                     python_files = [f for f in os.listdir(target_dir) if f.endswith('.py')]
-                    if not checks and python_files:
-                        checks.append(("Python Syntax", f"python3 -m py_compile {' '.join(python_files)}"))
-
-                    if not checks:
-                        return "No specific project configuration found (package.json/tsconfig.json). Skipping advanced verification."
-
+                    if not checks and python_files: checks.append(("Python Syntax", f"python3 -m py_compile {' '.join(python_files)}"))
+                    if not checks: return "No specific project configuration found. Skipping advanced verification."
                     results = []
                     for name, cmd in checks:
                         try:
                             status("VERIFY", f"Running {name}...", C_YELLOW)
                             res = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=target_dir, timeout=60)
-                            if res.returncode != 0:
-                                results.append(f"{name} Failed:\n{res.stderr[:1000]}")
-                        except subprocess.TimeoutExpired:
-                            results.append(f"{name} Timed Out (60s).")
-                        except Exception as e:
-                            results.append(f"{name} Error: {str(e)}")
-                    
+                            if res.returncode != 0: results.append(f"{name} Failed:\n{res.stderr[:1000]}")
+                        except subprocess.TimeoutExpired: results.append(f"{name} Timed Out (60s).")
+                        except Exception as e: results.append(f"{name} Error: {str(e)}")
                     return "Project is clean!" if not results else "\n".join(results)
                 elif action == "fetch_url":
                     req = urllib.request.Request(payload, headers={'User-Agent': 'Mozilla/5.0'})
@@ -358,7 +373,6 @@ class ToolBox:
                         try: data = json.loads(payload)
                         except: return "Error: payload must be JSON for write_file"
                     else: data = payload
-                    
                     safe_path = path_guard(data['path'])
                     os.makedirs(os.path.dirname(safe_path), exist_ok=True)
                     with open(safe_path, 'w') as f: f.write(data['content'])
@@ -368,13 +382,11 @@ class ToolBox:
                     chat_id = os.getenv("TELEGRAM_USER_ID")
                     if not bot_token or not chat_id: return "Telegram credentials missing."
                     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-                    # Truncate payload to Telegram's limit (~4096)
                     safe_payload = str(payload)[:4000]
                     req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Evolution Protocol]\n{safe_payload}"}).encode(), headers={"Content-Type": "application/json"})
                     urllib.request.urlopen(req)
                     return "Telegram notification sent."
                 elif action == "inspect_system":
-                    # Computer Use: Introspection of the environment
                     try:
                         ps = subprocess.run("ps -aux --sort=-%cpu | head -n 10", shell=True, capture_output=True, text=True).stdout
                         ports = subprocess.run("ss -tuln", shell=True, capture_output=True, text=True).stdout
@@ -382,15 +394,35 @@ class ToolBox:
                         return f"ACTIVE_PROCESSES:\n{ps}\nOPEN_PORTS:\n{ports}\nDISK_USAGE:\n{df}"
                     except Exception as e: return f"Inspection Error: {str(e)}"
                 elif action == "test_service":
-                    # Computer Use: Verify if a web service is active
                     try:
-                        # payload is expected to be a URL like http://localhost:3000
                         req = urllib.request.Request(payload, method="HEAD")
                         with urllib.request.urlopen(req, timeout=5) as response:
                             return f"Service {payload} is UP (Status: {response.status})"
                     except Exception as e: return f"Service {payload} is DOWN or Unreachable: {str(e)}"
+                elif action == "deploy_vercel":
+                    # External Deployment Autonomy
+                    try:
+                        cmd = f"cd {path_guard(payload)} && npx vercel --prod --yes --token $VERCEL_TOKEN"
+                        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                        if res.returncode == 0:
+                            # Extract URL from stdout
+                            match = re.search(r"https://[a-zA-Z0-9-]+\.vercel\.app", res.stdout)
+                            if match: return f"Deployed successfully to: {match.group(0)}"
+                            return f"Deployed, but couldn't parse URL. Output:\n{res.stdout}"
+                        return f"Deploy Failed:\n{res.stderr}"
+                    except Exception as e: return f"Deploy Error: {str(e)}"
+                elif action == "create_github_repo":
+                    try:
+                        if isinstance(payload, str): data = json.loads(payload)
+                        else: data = payload
+                        repo_name = data.get("name")
+                        target_dir = path_guard(data.get("path"))
+                        cmd = f"cd {target_dir} && git init && gh repo create {repo_name} --public --source=. --remote=origin --push"
+                        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                        if res.returncode == 0: return f"GitHub Repo created: https://github.com/{repo_name}"
+                        return f"GitHub Creation Failed:\n{res.stderr}"
+                    except Exception as e: return f"GitHub Error: {str(e)}"
                 else:
-                    # Check for Dynamic Tool
                     dynamic_tool_path = os.path.join(AGENT_ROOT, "bin", "tools", f"{action}.py")
                     if os.path.exists(dynamic_tool_path):
                         import importlib.util
@@ -398,12 +430,9 @@ class ToolBox:
                         dynamic_module = importlib.util.module_from_spec(spec)
                         try:
                             spec.loader.exec_module(dynamic_module)
-                            if hasattr(dynamic_module, 'execute'):
-                                return str(dynamic_module.execute(payload))
-                            else:
-                                return f"Dynamic tool {action} missing 'execute(payload)' function."
-                        except Exception as e:
-                            return f"Dynamic tool {action} execution failed: {str(e)}"
+                            if hasattr(dynamic_module, 'execute'): return str(dynamic_module.execute(payload))
+                            else: return f"Dynamic tool {action} missing 'execute(payload)' function."
+                        except Exception as e: return f"Dynamic tool execution failed: {str(e)}"
 
                 return f"Unknown tool: {action}"
         except Exception as e: return f"Tool Error: {str(e)}"
@@ -705,6 +734,62 @@ class GeminiMAS:
             with open(CHAT_LOG, 'r') as f:
                 for l in f.readlines()[-6:]: self.history.append(json.loads(l))
 
+    def generate_dashboard(self):
+        """Generates a static HTML dashboard for observability during sleep cycles."""
+        status("OBSERVE", "Generating Mission Control Dashboard...", C_CYAN)
+        
+        # Gather stats
+        cfg = read_local_config()
+        hw = cfg.get("_current_probe", {})
+        memories = self.db.semantic_search("*", limit=50)
+        muscle_memories = self.db.search_muscle_memory("*", limit=50)
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>GeminiMAS Mission Control</title>
+            <style>
+                body {{ font-family: -apple-system, system-ui, sans-serif; background: #121212; color: #fff; padding: 20px; }}
+                .card {{ background: #1e1e1e; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #333; }}
+                h1, h2 {{ color: #00d2ff; }}
+                pre {{ background: #000; padding: 10px; border-radius: 4px; overflow-x: auto; color: #a5d6ff; }}
+                .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
+            </style>
+        </head>
+        <body>
+            <h1>GeminiMAS | {self.machine_name}</h1>
+            <div class="grid">
+                <div class="card">
+                    <h2>Hardware Profile</h2>
+                    <ul>
+                        <li><b>Profile:</b> {hw.get('profile', 'Unknown').upper()}</li>
+                        <li><b>CPU Cores:</b> {hw.get('cpu_count', 'Unknown')}</li>
+                        <li><b>RAM:</b> {hw.get('mem_gb', 'Unknown')} GB</li>
+                        <li><b>Max Threads:</b> {cfg.get('max_threads', 'Unknown')}</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h2>Swarm Status</h2>
+                    <p><b>Current Project:</b> {self.current_project}</p>
+                    <p><b>Evolution Interval:</b> {cfg.get('evolution_interval_hrs', 4)} hours</p>
+                    <p><b>Last Update:</b> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Muscle Memory (Self-Healing Tools)</h2>
+                <ul>
+                    {"".join([f"<li><b>{m['intent']}:</b> <code>{m['command']}</code></li>" for m in muscle_memories[:10]])}
+                </ul>
+            </div>
+        </body>
+        </html>
+        """
+        with open(os.path.join(AGENT_ROOT, "agency_status.html"), "w") as f:
+            f.write(html)
+        return "Dashboard updated."
+
     def get_directory_structure(self):
         """Returns a concise tree representation of the workspace."""
         try:
@@ -899,6 +984,7 @@ Output ONLY the markdown text for this persona's system instructions.
             "required": ["thought", "tool", "payload"]
         }
 
+        start_time = time.time()
         for attempt in range(12): # Increased attempts for self-correction
             # Use the Pro model for the worker loop to ensure high-quality reasoning
             output = self.client_pro.generate(history, system_instruction=sys_prompt, images=images, schema=tool_schema)
@@ -907,6 +993,13 @@ Output ONLY the markdown text for this persona's system instructions.
                     cmd = json.loads(output)
                     
                     if cmd['tool'] == 'final_answer':
+                        # Performance Self-Optimization Audit
+                        elapsed = time.time() - start_time
+                        if attempt > 3 or elapsed > 60:
+                            opt_prompt = f"Task took {attempt} attempts and {elapsed:.1f}s.\nHistory:\n{history[-3000:]}\nIdentify inefficiency and propose a rule to speed this up in the future."
+                            advice = self.client_lite.generate(opt_prompt, system_instruction="You are a Performance Auditor.")
+                            with open(os.path.join(AGENT_ROOT, "logs/performance_optimizations.md"), "a") as f:
+                                f.write(f"\n## Optimization ({datetime.now()})\nTask: {task_desc}\nLatency: {elapsed:.1f}s\nAttempts: {attempt}\nAdvice: {advice}\n")
                         return cmd['payload']
 
                     # Print the agent's internal thought process to the UI
@@ -1213,6 +1306,7 @@ def heartbeat_daemon(api_key):
                 # 3. Sleep Cycle: Idle Memory Consolidation (once every 30 mins)
                 if (now - last_consolidation) > 1800:
                     mas.consolidate_memory()
+                    mas.generate_dashboard()
                     last_consolidation = now
 
             time.sleep(sleep_interval)
@@ -1241,7 +1335,8 @@ def interactive_loop(api_key):
 
     print(f"\n{C_YELLOW}{C_BOLD}COMMANDS:{C_END}")
     print(f" {C_CYAN}/config{C_END}  {C_DIM}System Matrix{C_END}  {C_CYAN}/rescan{C_END}  {C_DIM}HW Probe{C_END}  {C_CYAN}/help{C_END}    {C_DIM}Docs{C_END}")
-    print(f" {C_CYAN}/image{C_END}   {C_DIM}Attach Vision{C_END}  {C_CYAN}/projects{C_END} {C_DIM}List All{C_END}  {C_CYAN}exit{C_END}     {C_DIM}Quit{C_END}\n")
+    print(f" {C_CYAN}/image{C_END}   {C_DIM}Attach Vision{C_END}  {C_CYAN}/projects{C_END} {C_DIM}List All{C_END}  {C_CYAN}exit{C_END}     {C_DIM}Quit{C_END}")
+    print(f" {C_CYAN}/approve{C_END} {C_DIM}Accept Action{C_END}  {C_CYAN}/reject{C_END}   {C_DIM}Deny Action{C_END}\n")
 
     while True:
         try:
@@ -1251,6 +1346,29 @@ def interactive_loop(api_key):
             if not inp: continue
             if inp.lower() in ['exit', 'quit']: break
             if inp.lower() == 'heartbeat': heartbeat_daemon(api_key); continue
+
+            # Governance Commands
+            if inp.lower() == "/approve":
+                approval_file = os.path.join(AGENT_ROOT, "core/pending_approval.json")
+                if os.path.exists(approval_file):
+                    with open(approval_file, "r") as f: state = json.load(f)
+                    state["status"] = "APPROVED"
+                    with open(approval_file, "w") as f: json.dump(state, f)
+                    status("GOVERNANCE", "Action APPROVED.", C_GREEN)
+                else:
+                    status("GOVERNANCE", "No pending actions.", C_DIM)
+                continue
+                
+            if inp.lower() == "/reject":
+                approval_file = os.path.join(AGENT_ROOT, "core/pending_approval.json")
+                if os.path.exists(approval_file):
+                    with open(approval_file, "r") as f: state = json.load(f)
+                    state["status"] = "REJECTED"
+                    with open(approval_file, "w") as f: json.dump(state, f)
+                    status("GOVERNANCE", "Action REJECTED.", C_RED)
+                else:
+                    status("GOVERNANCE", "No pending actions.", C_DIM)
+                continue
 
             # Local Management Commands
             images = None
