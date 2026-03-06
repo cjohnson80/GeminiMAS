@@ -1,6 +1,17 @@
 # Active Goals
-- [ ] **EVOLUTION PROTOCOL:** Examine your source code in `~/GeminiMAS_Repo/bin/`. Invent a new lightweight feature or optimization. 
-      1. Use `run_shell` to `cd ~/GeminiMAS_Repo` and run `git checkout -b upgrade-feature-name`.
-      2. Use `write_file` or `run_shell` to implement the feature in the code.
-      3. Use `run_shell` to `git add .`, `git commit -m "Auto-Upgrade: [Feature]"`, and `git push origin HEAD`.
-      4. Use the `notify_telegram` tool to send a summary of the upgrade to the user, instructing them to reply with `/approve [branch_name]`.
+- [x] **RESEARCH SWARM (24h):** Researches latest AI updates and Next.js/TS patterns. 
+      1. Use AIScout to research LLM/Agentic trends.
+      2. Use FrameworkScout to research Next.js/TypeScript best practices.
+      3. Save findings to knowledge/ folder.
+      4. Use CoreEvolver to propose code upgrades to the repository.
+
+- [x] **EVOLUTION PROTOCOL (GLOBAL):** Examine your source code in `$REPO_ROOT/bin/`. Invent a new lightweight feature or optimization for ALL machines.
+      1. Use `run_shell` to `cd $REPO_ROOT`.
+      2. Create a unique branch: `git checkout -b evolution-$CURRENT_MACHINE-$(date +%s)`.
+      3. Implement the feature. **Mandate:** DO NOT delete existing features.
+      4. Use `run_shell` to `git add .`, `git commit -m "Global Optimization: [Feature Description]"`, and `git push origin HEAD`.
+      5. Notify the user via Telegram for approval.
+
+- [x] **EVOLUTION PROTOCOL (LOCAL):** Optimize your performance for this specific machine (`$CURRENT_MACHINE`).
+      1. If you need to stop using a feature (e.g., too much RAM), update the `disabled_features` list in `$AGENT_ROOT/core/local_config.json`.
+      2. DO NOT delete the code for that feature from the repo.
