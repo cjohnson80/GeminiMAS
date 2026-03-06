@@ -798,31 +798,34 @@ If there are issues, reply with 'REJECT' followed by a bulleted list of fixes re
             return res
         return None
 
+    def fabricate_persona(self, task_desc, context):
+        """Theoretical Level 5: Dynamically synthesizes a specialist persona for a specific task."""
+        fabricator_prompt = f"""
+[TASK]
+{task_desc}
+
+[CONTEXT_SUMMARY]
+{context[:2000]}
+
+[MISSION]
+You are the Persona Architect. Synthesize the PERFECT specialist persona to solve this task.
+The persona must be highly specific (e.g., 'Legacy Perl Migration Specialist' or 'Next.js 15 Partial Prerendering Expert').
+Define:
+1. IDENTITY: Who they are and their deep technical background.
+2. BEHAVIOR: Their tone, strictness, and specific coding philosophy.
+3. SUCCESS_CRITERIA: What 'perfect' looks like for them.
+
+Output ONLY the markdown text for this persona's system instructions.
+"""
+        status("FABRICATE", "Synthesizing polymorphic specialist persona...", C_PURPLE)
+        return self.client_pro.generate(fabricator_prompt, system_instruction="You are a Meta-Architect capable of synthesizing experts.")
+
     def run_worker_with_tools(self, task_desc, context, sys_instr, role="Developer", images=None):
-        # Role-specific system instruction
-        role_prompt = f"{sys_instr}\n\nYOUR_ROLE: {role}\n"
-        if role == "Architect":
-            role_prompt += "Focus on system design, directory structure, scalability, and defining clear interfaces. Before creating files, write a detailed plan to PROJECT_SUMMARY.md mapping out dependencies and data flow.\n"
-        elif role == "Reviewer":
-            role_prompt += "You are a merciless Code Reviewer. Focus on code quality, security, and strictness. YOU MUST use `verify_project` and fix any errors until the project is clean. Reject hacky workarounds.\n"
-        elif role == "Developer":
-            role_prompt += "You are a 10x Full-Stack Engineer and Elite Coder. Build beautiful, highly functional client websites (Next.js/React preferred). Write idiomatic, production-ready code. Do not leave 'TODO' comments. You are encouraged to invent new methods or scripts to do your job better.\n"
-        elif role == "AgencyLead":
-            role_prompt += "You are a Digital Agency Tech Lead. Your goal is to deliver visually stunning, performant websites to clients. Break down vague client requests into concrete, professional technical specs.\n"
-        elif role == "ToolSmith":
-            role_prompt += "You are an Automation Engineer. Your sole purpose is to write reusable bash scripts, python utilities, or Node.js tools and save them in the `skills/` or `bin/tools/` directories to make the swarm faster. For python tools, write them in `bin/tools/` with a simple execute(payload) method.\n"
-        elif role == "SecurityExpert":
-            role_prompt += "You are an Application Security Expert. Review code for injection vectors, hardcoded secrets, weak auth, and cross-site scripting (XSS). Suggest and implement immediate mitigations.\n"
-        elif role == "DatabaseArchitect":
-            role_prompt += "You are a Database Architect. Focus on schema design, query optimization, indexing strategies, and preventing N+1 query problems.\n"
-        elif role == "PerformanceEngineer":
-            role_prompt += "You are a Performance Engineer. Focus on minimizing memory footprint, optimizing loops, lazy loading, and ensuring the application runs smoothly on the target hardware.\n"
-        elif role == "AIScout":
-            role_prompt += "You are an AI Research Agent. Your goal is to find the latest updates in LLMs, agentic workflows, and AI optimization that can be applied to this system.\n"
-        elif role == "FrameworkScout":
-            role_prompt += "You are a Framework Specialist. Research the latest Next.js coding standards, TypeScript policies, and best practices for creating scalable agents.\n"
-        elif role == "CoreEvolver":
-            role_prompt += "You are the Self-Evolution Architect. Read the research from AIScout and FrameworkScout in the KNOWLEDGE_DIR and apply those improvements to my core code.\n"
+        # Theoretical Level 5: Polymorphic Persona Generation
+        # Instead of hardcoded roles, we dynamically fabricate the persona
+        dynamic_role_instr = self.fabricate_persona(task_desc, context)
+        
+        role_prompt = f"{sys_instr}\n\n<<< YOUR DYNAMIC PERSONA >>>\n{dynamic_role_instr}\n<<< END PERSONA >>>\n"
 
         # Discover dynamic tools
         dynamic_tools = []
