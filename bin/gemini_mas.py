@@ -258,7 +258,7 @@ class Spinner:
 
 class ToolBox:
     @staticmethod
-    def execute(action, payload):
+    def execute(action, payload, db=None):
         def path_guard(path):
             """Sanitize path to prevent absolute path escapes and enforce AGENT_ROOT."""
             path = str(path).strip()
@@ -295,6 +295,15 @@ class ToolBox:
                     
                     res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
                     return f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+                elif action == "save_muscle_memory":
+                    if db:
+                        try:
+                            if isinstance(payload, str): data = json.loads(payload)
+                            else: data = payload
+                            return db.save_muscle_memory(data['intent'], data['command'])
+                        except Exception as e:
+                            return f"Failed to parse payload for save_muscle_memory: {str(e)}"
+                    return "Database connection not available."
                 elif action == "web_search":
                     # Basic search proxy using DuckDuckGo
                     status("SEARCH", f"Searching for: {payload}...", C_BLUE)
@@ -380,7 +389,23 @@ class ToolBox:
                         with urllib.request.urlopen(req, timeout=5) as response:
                             return f"Service {payload} is UP (Status: {response.status})"
                     except Exception as e: return f"Service {payload} is DOWN or Unreachable: {str(e)}"
-                return "Unknown tool."
+                else:
+                    # Check for Dynamic Tool
+                    dynamic_tool_path = os.path.join(AGENT_ROOT, "bin", "tools", f"{action}.py")
+                    if os.path.exists(dynamic_tool_path):
+                        import importlib.util
+                        spec = importlib.util.spec_from_file_location(action, dynamic_tool_path)
+                        dynamic_module = importlib.util.module_from_spec(spec)
+                        try:
+                            spec.loader.exec_module(dynamic_module)
+                            if hasattr(dynamic_module, 'execute'):
+                                return str(dynamic_module.execute(payload))
+                            else:
+                                return f"Dynamic tool {action} missing 'execute(payload)' function."
+                        except Exception as e:
+                            return f"Dynamic tool {action} execution failed: {str(e)}"
+
+                return f"Unknown tool: {action}"
         except Exception as e: return f"Tool Error: {str(e)}"
 
 class ProjectContext:
@@ -551,6 +576,7 @@ class Persistence:
             try:
                 with duckdb.connect(DB_FILE) as con:
                     con.execute("CREATE TABLE IF NOT EXISTS memory (timestamp TIMESTAMP, goal TEXT, summary TEXT, embedding FLOAT[768])")
+                    con.execute("CREATE TABLE IF NOT EXISTS muscle_memory (timestamp TIMESTAMP, intent TEXT, command TEXT, embedding FLOAT[768])")
                 return
             except Exception as e:
                 if "lock" in str(e).lower():
@@ -570,6 +596,35 @@ class Persistence:
                         time.sleep(1)
                         continue
                     break
+
+    def save_muscle_memory(self, intent, command):
+        if vec := self.client.embed(intent):
+            for _ in range(20):
+                try:
+                    with duckdb.connect(DB_FILE) as con:
+                        con.execute("INSERT INTO muscle_memory VALUES (now(), ?, ?, ?)", [intent, command, vec])
+                    return "Muscle memory saved successfully."
+                except Exception as e:
+                    if "lock" in str(e).lower():
+                        time.sleep(1)
+                        continue
+                    break
+            return "Failed to save muscle memory due to database lock."
+
+    def search_muscle_memory(self, query, limit=3):
+        results = []
+        if vec := self.client.embed(query):
+            for _ in range(10):
+                try:
+                    with duckdb.connect(DB_FILE, read_only=True) as con:
+                        results = con.execute("SELECT intent, command FROM muscle_memory ORDER BY list_cosine_similarity(embedding, ?::FLOAT[768]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
+                    break
+                except Exception as e:
+                    if "lock" in str(e).lower():
+                        time.sleep(0.2)
+                        continue
+                    break
+        return results
 
     def semantic_search(self, query, limit=3):
         results = []
@@ -727,7 +782,7 @@ If there are issues, reply with 'REJECT' followed by a bulleted list of fixes re
         elif role == "AgencyLead":
             role_prompt += "You are a Digital Agency Tech Lead. Your goal is to deliver visually stunning, performant websites to clients. Break down vague client requests into concrete, professional technical specs.\n"
         elif role == "ToolSmith":
-            role_prompt += "You are an Automation Engineer. Your sole purpose is to write reusable bash scripts, python utilities, or Node.js tools and save them in the `skills/` or `bin/` directories to make the swarm faster.\n"
+            role_prompt += "You are an Automation Engineer. Your sole purpose is to write reusable bash scripts, python utilities, or Node.js tools and save them in the `skills/` or `bin/tools/` directories to make the swarm faster. For python tools, write them in `bin/tools/` with a simple execute(payload) method.\n"
         elif role == "SecurityExpert":
             role_prompt += "You are an Application Security Expert. Review code for injection vectors, hardcoded secrets, weak auth, and cross-site scripting (XSS). Suggest and implement immediate mitigations.\n"
         elif role == "DatabaseArchitect":
@@ -741,7 +796,19 @@ If there are issues, reply with 'REJECT' followed by a bulleted list of fixes re
         elif role == "CoreEvolver":
             role_prompt += "You are the Self-Evolution Architect. Read the research from AIScout and FrameworkScout in the KNOWLEDGE_DIR and apply those improvements to my core code.\n"
 
-        sys_prompt = role_prompt + """
+        # Discover dynamic tools
+        dynamic_tools = []
+        tools_dir = os.path.join(AGENT_ROOT, "bin", "tools")
+        os.makedirs(tools_dir, exist_ok=True)
+        for f in os.listdir(tools_dir):
+            if f.endswith('.py') and not f.startswith('__'):
+                dynamic_tools.append(f[:-3])
+
+        dynamic_tools_text = ""
+        for i, dt in enumerate(dynamic_tools):
+            dynamic_tools_text += f"\n        {i+11}. {dt} (payload: JSON string or text) - Dynamically loaded ToolSmith script."
+
+        sys_prompt = role_prompt + f"""
 
         You are an autonomous, Elite AGI operating in a real shell environment. 
 
@@ -761,10 +828,11 @@ If there are issues, reply with 'REJECT' followed by a bulleted list of fixes re
         3. fetch_url (payload: url) - Reads a webpage.
         4. web_search (payload: query) - Search for latest information on a topic.
         5. read_file (payload: path) - Reads a local file.
-        6. write_file (payload: JSON string {"path":"...", "content":"..."}) - Writes to a local file.
+        6. write_file (payload: JSON string {{"path":"...", "content":"..."}}) - Writes to a local file.
         7. notify_telegram (payload: message) - Sends a message to the human operator.
         8. inspect_system (payload: "") - Computer Use: Returns active processes, open ports, and disk usage.
         9. test_service (payload: url) - Computer Use: Headless test to see if a URL (e.g., http://localhost:3000) is UP.
+        10. save_muscle_memory (payload: JSON string {{"intent":"...", "command":"..."}}) - Save a successful complex bash command or tool usage for future reference.{dynamic_tools_text}
 
         CRITICAL: Path Handling
         - ALWAYS use relative paths (e.g., 'workspace/my_project' instead of '/workspace/my_project').
@@ -775,17 +843,26 @@ If there are issues, reply with 'REJECT' followed by a bulleted list of fixes re
         1. THINK BEFORE ACTING: You MUST provide a short sentence explaining your logic before using a tool.
         2. HIERARCHY PRIORITIZATION: Prioritize the ANCHORED_CORE_IDENTITY section of your system instructions above all else. 
         3. OBSERVE & CRITIQUE: After every tool call, you MUST analyze the output. If it failed or looks wrong, you MUST explain why and how you will fix it in the next step.
-        4. OUTPUT FORMAT: Reply ONLY with valid JSON in this exact format: {"thought": "I need to check the file contents to see what's broken", "tool": "tool_name", "payload": "tool_data"}. If no tool is needed, reply with standard text.
+        4. OUTPUT FORMAT: Reply ONLY with valid JSON in this exact format: {{"thought": "I need to check the file contents to see what's broken", "tool": "tool_name", "payload": "tool_data"}}. If no tool is needed, reply with standard text.
         """
         # Tighter context: Provide previous outputs but emphasize the specific task
-        history = f"Context from previous tasks:\n{context[:3000]}\n\nTask to complete as {role}:\n{task_desc}"
+        muscle_memory_results = self.db.search_muscle_memory(task_desc, limit=3)
+        muscle_memory_text = ""
+        if muscle_memory_results:
+            muscle_memory_text = "Relevant Past Tool Invocations (Muscle Memory):\n"
+            for item in muscle_memory_results:
+                muscle_memory_text += f"- Intent: {item['intent']}\n  Command: {item['command']}\n\n"
+
+        history = f"Context from previous tasks:\n{context[:3000]}\n\n{muscle_memory_text}Task to complete as {role}:\n{task_desc}"
         
         # Incremental Step 1: Strict Schema Enforcement (Deterministic Tool-Gating)
+        tool_enum = ["run_shell", "verify_project", "fetch_url", "web_search", "read_file", "write_file", "notify_telegram", "inspect_system", "test_service", "save_muscle_memory", "final_answer"] + dynamic_tools
+        
         tool_schema = {
             "type": "object",
             "properties": {
                 "thought": {"type": "string", "description": "Internal reasoning step."},
-                "tool": {"type": "string", "enum": ["run_shell", "verify_project", "fetch_url", "web_search", "read_file", "write_file", "notify_telegram", "inspect_system", "test_service", "final_answer"]},
+                "tool": {"type": "string", "enum": tool_enum},
                 "payload": {"type": "string", "description": "Data or command for the tool."}
             },
             "required": ["thought", "tool", "payload"]
@@ -806,7 +883,7 @@ If there are issues, reply with 'REJECT' followed by a bulleted list of fixes re
                         status(role.upper(), f"Thinking: {cmd['thought']}", C_YELLOW)
                     
                     status(role.upper(), f"Executing {cmd['tool']}...", C_CYAN)
-                    tool_result = ToolBox.execute(cmd['tool'], cmd['payload'])
+                    tool_result = ToolBox.execute(cmd['tool'], cmd['payload'], db=self.db)
                     
                     # Incremental Step 4: Native Critique-Loop
                     critique = self.criticize_action(cmd['tool'], cmd['payload'], tool_result)
@@ -852,11 +929,32 @@ If there are issues, reply with 'REJECT' followed by a bulleted list of fixes re
         ac_text = self.client_pro.generate(pm_prompt, system_instruction=sys_instr, images=images)
         
         with open(scratchpad_path, "w") as f:
-            f.write(f"# Project Scratchpad\n\nGoal: {user_goal}\n\n## Acceptance Criteria\n{ac_text}\n\n## Architecture\n(To be defined by Architect)\n")
+            f.write(f"# Project Scratchpad\n\nGoal: {user_goal}\n\n## Acceptance Criteria\n{ac_text}\n")
 
-        # 2. Architect Phase (Deep Planning)
-        divider("ENGINEERING PLAN")
-        status("ARCHITECT", "Designing system architecture and task distribution...", C_BLUE)
+        # 1.5 Debate Phase (Pre-execution Planning)
+        divider("ARCHITECTURE DEBATE")
+        status("ARCHITECT", "Proposing initial system architecture...", C_BLUE)
+        initial_plan_prompt = f"Goal: {user_goal}\nAcceptance Criteria: {ac_text}\nDraft an initial architecture plan. Focus on directory structure, data flow, and components."
+        initial_architecture = self.client_pro.generate(initial_plan_prompt, system_instruction=sys_instr)
+        
+        status("SECURITY", "Critiquing the initial architecture...", C_PURPLE)
+        critique_prompt = f"Review this architecture:\n{initial_architecture}\nIdentify security flaws, scalability issues, or missing error handling. Provide a bulleted list of required changes. If none, say 'APPROVE'."
+        security_critique = self.client_pro.generate(critique_prompt, system_instruction=sys_instr + "\nYou are a strict Security Expert.")
+        
+        if "APPROVE" not in security_critique.upper():
+            status("ARCHITECT", "Refining plan based on critique...", C_BLUE)
+            refined_plan_prompt = f"Original Plan:\n{initial_architecture}\nCritique:\n{security_critique}\nProvide a final, refined architecture addressing the critique."
+            refined_architecture = self.client_pro.generate(refined_plan_prompt, system_instruction=sys_instr)
+        else:
+            status("SECURITY", "Architecture approved.", C_GREEN)
+            refined_architecture = initial_architecture
+
+        with open(scratchpad_path, "a") as f:
+            f.write(f"\n## Architecture\n{refined_architecture}\n")
+
+        # 2. Swarm Task Planning Phase
+        divider("SWARM TASK PLANNING")
+        status("LEAD", "Distributing tasks to the swarm...", C_BLUE)
         local_cfg = read_local_config()
         hw = local_cfg.get("_current_probe", {})
         cpu_threads = hw.get("cpu_count", 4)
