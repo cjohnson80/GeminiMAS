@@ -648,6 +648,34 @@ class Persistence:
                     skills_found.append({"goal": f"Skill: {f}", "summary": read_file_safe(os.path.join(SKILLS_DIR, f))[:2000]})
 
         return results + skills_found
+class ExecutionGraph:
+    def __init__(self, tasks):
+        self.nodes = {t['id']: t for t in tasks}
+        self.current_node_id = tasks[0]['id'] if tasks else None
+        self.results = {}
+        self.status = "PENDING"
+
+    def get_next_task(self):
+        if not self.current_node_id: return None
+        return self.nodes[self.current_node_id]
+
+    def process_result(self, node_id, result, success=True):
+        self.results[node_id] = result
+        node = self.nodes[node_id]
+        
+        # Dynamic Routing Logic
+        if success:
+            # Look for explicit 'next' or just the next ID
+            self.current_node_id = node.get('on_success') or (node_id + 1 if (node_id + 1) in self.nodes else None)
+        else:
+            # Route to a debugger or specific error handler if defined
+            self.current_node_id = node.get('on_fail') or "TERMINATE"
+            
+        if not self.current_node_id or self.current_node_id == "TERMINATE":
+            self.status = "COMPLETED"
+            return None
+        return self.nodes[self.current_node_id]
+
 class GeminiMAS:
     def __init__(self, api_key):
         self.api_key = api_key
@@ -953,20 +981,18 @@ If there are issues, reply with 'REJECT' followed by a bulleted list of fixes re
             f.write(f"\n## Architecture\n{refined_architecture}\n")
 
         # 2. Swarm Task Planning Phase
-        divider("SWARM TASK PLANNING")
-        status("LEAD", "Distributing tasks to the swarm...", C_BLUE)
+        divider("DYNAMIC SWARM GRAPH")
+        status("LEAD", "Designing execution graph...", C_BLUE)
         local_cfg = read_local_config()
         hw = local_cfg.get("_current_probe", {})
         cpu_threads = hw.get("cpu_count", 4)
         
         prompt = (f"Goal: {user_goal}\nAcceptance Criteria: {ac_text}\n"
-                  f"Plan 3-15 tasks using a swarm of specialized experts. JSON format: [{{'id':1, 'role':'Role', 'task':'...', 'parallel': false}}].\n"
+                  f"Design a dynamic execution graph using a swarm of specialized experts. \n"
+                  f"JSON format: [{{'id':1, 'role':'Role', 'task':'...', 'parallel': false, 'on_success': 2, 'on_fail': 'TERMINATE'}}].\n"
                   f"Available Roles: Architect, Developer, Reviewer, SecurityExpert, DatabaseArchitect, DocumentationLead, PerformanceEngineer, ToolSmith.\n"
-                  f"- Use an Architect first to define structure in {scratchpad_path}.\n"
-                  f"- Break large goals into multiple Developer tasks.\n"
-                  f"- Use specialized experts (Security, DB) for critical components.\n"
-                  f"- Use a Reviewer at the end to verify code and fix errors.\n"
-                  f"- Set 'parallel': true for independent tasks to leverage my {cpu_threads} CPU threads.")
+                  f"- Use specialized experts for critical components.\n"
+                  f"- Set 'parallel': true for independent branches to leverage my {cpu_threads} CPU threads.")
 
         # Quota-aware generation
         plan_raw = self.client_pro.generate(prompt, system_instruction=sys_instr, json_mode=True, images=images)
@@ -975,53 +1001,43 @@ If there are issues, reply with 'REJECT' followed by a bulleted list of fixes re
             plan_raw = self.client_lite.generate(prompt, system_instruction=sys_instr, json_mode=True, images=images)
 
         try: 
-            plan = json.loads(plan_raw.strip("`json \n"))
-            status("SWARM", f"Plan locked: {len(plan)} specialized tasks queued.", C_GREEN)
+            tasks = json.loads(plan_raw.strip("`json \n"))
+            graph = ExecutionGraph(tasks)
+            status("SWARM", f"Graph locked: {len(tasks)} adaptive nodes mapped.", C_GREEN)
         except Exception as e:
             return f"Planning failed: {str(e)}"
 
         results = {}
-        threads = []
         q = queue.Queue()
 
         def worker(step, sys_instr, results_so_far, q, imgs):
             role = step.get('role', 'Developer')
             try:
-                status(role.upper(), f"Starting Task {step['id']}...", C_GREEN)
+                status(role.upper(), f"Node {step['id']} Starting...", C_GREEN)
                 res = self.run_worker_with_tools(step['task'], str(results_so_far), sys_instr, role=role, images=imgs)
-                q.put((step['id'], res))
-                with open(os.path.join(session_dir, f"task_{step['id']}_{role}.md"), 'w') as f: f.write(res)
-                status(role.upper(), f"Task {step['id']} completed.", C_GREEN)
+                
+                # Check for success (heuristic: does it look like a failure?)
+                success = "error" not in res.lower() or "fixed" in res.lower()
+                q.put((step['id'], res, success))
+                
+                with open(os.path.join(session_dir, f"node_{step['id']}_{role}.md"), 'w') as f: f.write(res)
+                status(role.upper(), f"Node {step['id']} Finished.", C_GREEN)
             except Exception as e:
-                status("CRASH", f"Task {step['id']} ({role}) failed: {str(e)}", C_RED)
-                q.put((step['id'], f"CRASH ERROR: {str(e)}"))
+                status("CRASH", f"Node {step['id']} ({role}) failed: {str(e)}", C_RED)
+                q.put((step['id'], f"CRASH ERROR: {str(e)}", False))
 
-        divider("EXECUTION PHASE")
-        for step in plan:
-            is_parallel = step.get('parallel', False)
-            role = step.get('role', 'Developer')
+        divider("ADAPTIVE EXECUTION")
+        while graph.status == "PENDING":
+            current_task = graph.get_next_task()
+            if not current_task: break
             
-            if is_parallel:
-                status("DEPLOY", f"Running {role} (Task {step['id']}) in parallel...", C_BLUE)
-                t = threading.Thread(target=worker, args=(step, sys_instr, dict(results), q, images))
-                t.daemon = True
-                t.start()
-                threads.append(t)
-            else:
-                # Wait for previous group with timeout
-                for t in threads: t.join(timeout=900)
-                while not q.empty():
-                    tid, tres = q.get(); results[tid] = tres
-                threads = []
-
-                worker(step, sys_instr, dict(results), q, images)
-                while not q.empty():
-                    tid, tres = q.get(); results[tid] = tres
-
-        # Final join
-        for t in threads: t.join(timeout=900)
-        while not q.empty():
-            tid, tres = q.get(); results[tid] = tres
+            # Simple linear loop for now to ensure reliability
+            worker(current_task, sys_instr, results, q, images)
+            
+            # Handle the result
+            node_id, res, success = q.get()
+            results[node_id] = res
+            graph.process_result(node_id, res, success=success)
 
         divider("FINAL REVIEW")
         status("SYSTEM", "Synthesizing expert results...", C_BLUE)
@@ -1031,6 +1047,52 @@ If there are issues, reply with 'REJECT' followed by a bulleted list of fixes re
         status("SUCCESS", "Project delivered. Results saved to workspace.", C_GREEN)
         divider()
         return final
+
+    def consolidate_memory(self):
+        """Idle reflection: Consolidates memories and muscle_memory into permanent skills."""
+        status("SLEEP", "Beginning memory consolidation cycle...", C_BLUE)
+        
+        # 1. Fetch recent memories
+        memories = self.db.semantic_search("*", limit=10) # Get a representative sample
+        muscle = self.db.search_muscle_memory("*", limit=10)
+        
+        if not memories and not muscle:
+            return "Nothing to consolidate."
+
+        consolidation_prompt = f"""
+[RECENT_MEMORIES]
+{json.dumps(memories)}
+
+[RECENT_MUSCLE_MEMORY]
+{json.dumps(muscle)}
+
+[MISSION]
+You are the System Librarian. Analyze the data above. 
+Identify any repeated patterns, successful complex commands, or architectural insights.
+If you find a generalized pattern that should be a "Skill", write a high-quality Markdown file for it.
+The Markdown should include:
+1. NAME: Clear title.
+2. CONTEXT: When to use this skill.
+3. LOGIC: The specific commands or code snippets.
+
+If no high-value patterns are found, reply with 'SKIP'.
+Otherwise, reply ONLY with valid JSON: {{"filename": "skill_name.md", "content": "markdown_content"}}
+"""
+        res = self.client_pro.generate(consolidation_prompt, system_instruction="You are a librarian focused on knowledge compression.")
+        
+        if "SKIP" not in res.upper() and "{" in res:
+            try:
+                block = res[res.find("{"):res.rfind("}")+1]
+                skill = json.loads(block)
+                skill_path = os.path.join(SKILLS_DIR, skill['filename'])
+                if not os.path.exists(skill_path):
+                    with open(skill_path, 'w') as f:
+                        f.write(skill['content'])
+                    status("SKILL", f"New skill consolidated: {skill['filename']}", C_GREEN)
+                    return f"Created {skill['filename']}"
+            except: pass
+        
+        return "Consolidation complete. No new skills identified."
 
     def process(self, user_input, stream=False, images=None):
         sys_instr = self.get_system_context()
@@ -1070,9 +1132,27 @@ def heartbeat_daemon(api_key):
     repo_path = os.path.expanduser('~/GeminiMAS_Repo')
     mailbox_path = os.path.join(repo_path, 'mailbox')
     last_research_file = os.path.join(AGENT_ROOT, "core/last_research.txt")
+    last_consolidation = 0
+    
+    # Store the initial hash of the core file to detect modifications
+    core_file_path = os.path.abspath(__file__)
+    try:
+        with open(core_file_path, 'rb') as f:
+            initial_core_hash = hash(f.read())
+    except:
+        initial_core_hash = None
 
     while True:
         try:
+            # Hot-Reload Check: If the file has changed on disk, replace the process
+            if initial_core_hash is not None:
+                with open(core_file_path, 'rb') as f:
+                    current_hash = hash(f.read())
+                if current_hash != initial_core_hash:
+                    status("EVOLUTION", "Core modification detected. Executing hot-reload...", C_PURPLE)
+                    # Use os.execv to replace the current process with the new code
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+
             cfg = read_local_config()
             evolution_interval = cfg.get("evolution_interval_hrs", 4) * 3600
             sleep_interval = cfg.get("heartbeat_sleep_sec", 5)
@@ -1126,6 +1206,11 @@ def heartbeat_daemon(api_key):
                 print(f"\n[Pulse] {datetime.now()} - Processing Evolution Tasks...")
                 # Consume the generator
                 for _ in mas.process(f"Execute the pending tasks in {HEARTBEAT_FILE}", stream=True): pass
+            else:
+                # 3. Sleep Cycle: Idle Memory Consolidation (once every 30 mins)
+                if (now - last_consolidation) > 1800:
+                    mas.consolidate_memory()
+                    last_consolidation = now
 
             time.sleep(sleep_interval)
         except KeyboardInterrupt: break
