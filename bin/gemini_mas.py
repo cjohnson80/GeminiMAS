@@ -364,16 +364,58 @@ class ToolBox:
                     req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": f"[Evolution Protocol]\n{safe_payload}"}).encode(), headers={"Content-Type": "application/json"})
                     urllib.request.urlopen(req)
                     return "Telegram notification sent."
+                elif action == "inspect_system":
+                    # Computer Use: Introspection of the environment
+                    try:
+                        ps = subprocess.run("ps -aux --sort=-%cpu | head -n 10", shell=True, capture_output=True, text=True).stdout
+                        ports = subprocess.run("ss -tuln", shell=True, capture_output=True, text=True).stdout
+                        df = subprocess.run("df -h /", shell=True, capture_output=True, text=True).stdout
+                        return f"ACTIVE_PROCESSES:\n{ps}\nOPEN_PORTS:\n{ports}\nDISK_USAGE:\n{df}"
+                    except Exception as e: return f"Inspection Error: {str(e)}"
+                elif action == "test_service":
+                    # Computer Use: Verify if a web service is active
+                    try:
+                        # payload is expected to be a URL like http://localhost:3000
+                        req = urllib.request.Request(payload, method="HEAD")
+                        with urllib.request.urlopen(req, timeout=5) as response:
+                            return f"Service {payload} is UP (Status: {response.status})"
+                    except Exception as e: return f"Service {payload} is DOWN or Unreachable: {str(e)}"
                 return "Unknown tool."
         except Exception as e: return f"Tool Error: {str(e)}"
+
+class ProjectContext:
+    @staticmethod
+    def get_source_map(max_files=50, max_size=5000):
+        """Generates a high-density map of the project's core source code."""
+        source_map = ""
+        count = 0
+        # Priority: bin/, core/, scripts/, skills/
+        priority_dirs = ['bin', 'core', 'scripts', 'skills']
+        
+        for p_dir in priority_dirs:
+            full_path = os.path.join(AGENT_ROOT, p_dir)
+            if not os.path.exists(full_path): continue
+            
+            for f in os.listdir(full_path):
+                if count >= max_files: break
+                if f.endswith(('.py', '.md', '.sh', '.js', '.ts')):
+                    f_path = os.path.join(full_path, f)
+                    if os.path.isfile(f_path):
+                        content = read_file_safe(f_path)
+                        rel_path = os.path.relpath(f_path, AGENT_ROOT)
+                        source_map += f"\n--- FILE: {rel_path} ---\n{content[:max_size]}\n"
+                        count += 1
+        return source_map
 
 class GeminiClient:
     def __init__(self, api_key, model="gemini-1.5-pro"):
         self.api_key = api_key
         self.model = model.replace("models/", "")
         self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/"
+        # Detect if this is a "Deep Thinking" model
+        self.is_thinking_model = "deep-think" in self.model or "3.1" in self.model
 
-    def generate(self, prompt, system_instruction=None, json_mode=False, history=None, images=None):
+    def generate(self, prompt, system_instruction=None, json_mode=False, history=None, images=None, schema=None):
         url = f"{self.base_url}{self.model}:generateContent?key={self.api_key}"
         contents = []
         if history:
@@ -389,20 +431,53 @@ class GeminiClient:
                     parts.append({"inlineData": {"mimeType": mime or "image/jpeg", "data": data}})
 
         contents.append({"role": "user", "parts": parts})
+        
+        # Modern Gemini 3.1 Reasoning Configuration
+        gen_config = {"temperature": 0.7, "maxOutputTokens": 8192}
+        if self.is_thinking_model:
+            # Enable reasoning/thinking if supported by the endpoint
+            gen_config["thinking_config"] = {"include_thoughts": True}
+
         payload = {
             "contents": contents,
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192}
+            "generationConfig": gen_config
         }
         if system_instruction: payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
         if json_mode: payload["generationConfig"]["responseMimeType"] = "application/json"
+        
+        # Inject responseSchema if provided for deterministic gating
+        if schema:
+            payload["generationConfig"]["responseMimeType"] = "application/json"
+            payload["generationConfig"]["responseSchema"] = schema
 
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                    headers={"Content-Type": "application/json"}, method="POST")
-        with Spinner(f"AI Brain Thinking ({self.model})"):
+        
+        spinner_text = f"AI Brain Reasoning ({self.model})" if self.is_thinking_model else f"AI Brain Thinking ({self.model})"
+        with Spinner(spinner_text):
             try:
                 with urllib.request.urlopen(req, timeout=120) as response:
                     result = json.loads(response.read().decode("utf-8"))
-                    return result['candidates'][0]['content']['parts'][0]['text']
+                    candidate = result['candidates'][0]
+                    
+                    # Extract Reasoning/Thought if present (Gemini 3.1 style)
+                    thought = ""
+                    if 'thought' in candidate:
+                        thought = candidate['thought']
+                    elif 'parts' in candidate['content'] and len(candidate['content']['parts']) > 1:
+                        # Sometimes thoughts are the first part
+                        thought = candidate['content']['parts'][0].get('text', '')
+                        text = candidate['content']['parts'][1].get('text', '')
+                    else:
+                        text = candidate['content']['parts'][0].get('text', '')
+                    
+                    if thought:
+                        # Log thought to a debug log or console for observability
+                        os.makedirs(os.path.join(AGENT_ROOT, "logs"), exist_ok=True)
+                        with open(os.path.join(AGENT_ROOT, "logs/reasoning.log"), "a") as f:
+                            f.write(f"\n--- REASONING ({datetime.now()}) ---\n{thought}\n")
+
+                    return text
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode("utf-8")
                 return f"API Error {e.code}: {err_body}"
@@ -562,10 +637,17 @@ class GeminiMAS:
         soul = read_file_safe(SOUL_FILE)
         local_cfg = read_local_config()
         dir_structure = self.get_directory_structure()
-        # Inject the VERIFIED hardware report into the heart of the agent's prompt
-        # This prevents the AI from hallucinating a different machine profile.
+        
+        # Incremental Step 2: Anchored Hierarchical Context
+        # We separate "Anchored Truths" from "Transient Context"
+        source_map = ProjectContext.get_source_map()
         hw = local_cfg.get("_current_probe", {})
-        hw_report = f"""
+        
+        # ANCHORED: Core Identity and System Rules (Immutable)
+        anchored_section = f"""
+<<< ANCHORED_CORE_IDENTITY (IMMUTABLE TRUTH) >>>
+{soul}
+
 [VERIFIED_HARDWARE_REPORT]
 - MACHINE_NAME: {self.machine_name}
 - CPU_CORES: {hw.get('cpu_count', 'Unknown')}
@@ -573,11 +655,20 @@ class GeminiMAS:
 - ASSIGNED_PROFILE: {hw.get('profile', 'standard')}
 - MAX_THREADS: {local_cfg.get('max_threads')}
 - DISABLED_FEATURES: {json.dumps(local_cfg.get('disabled_features', []))}
+<<< END ANCHORED_CORE_IDENTITY >>>
+"""
+
+        # TRANSIENT: Current Workspace State (Volatile)
+        transient_section = f"""
+<<< TRANSIENT_WORKSPACE_CONTEXT (VOLATILE) >>>
+[GLOBAL_SOURCE_CONTEXT]
+{source_map}
 
 [WORKSPACE_DIRECTORY_STRUCTURE]
 {dir_structure}
+<<< END TRANSIENT_WORKSPACE_CONTEXT >>>
 """
-        return f"{soul}\n{hw_report}\n"
+        return f"{anchored_section}\n{transient_section}\n"
 
     def triage(self, user_input):
         prompt = f"Analyze: '{user_input}'. Is this a casual CHAT or a TASK that requires coding/tools/system changes? Reply ONLY 'CHAT' or 'TASK'."
@@ -586,6 +677,43 @@ class GeminiMAS:
         res_upper = res.strip().upper()
         if "TASK" in res_upper: return "TASK"
         return "CHAT"
+
+    def criticize_action(self, tool, payload, result):
+        """Dedicated high-precision critique of a completed action."""
+        if tool != "write_file":
+            return None # Only critique writes for now to save tokens
+            
+        status("CRITIC", "Auditing new code for security & quality...", C_PURPLE)
+        
+        # Payload for write_file is a JSON string or dict
+        try:
+            if isinstance(payload, str): data = json.loads(payload)
+            else: data = payload
+            code = data.get('content', '')
+            path = data.get('path', 'unknown')
+        except: return None
+
+        critic_prompt = f"""
+[CODE_UNDER_REVIEW]
+Path: {path}
+Content:
+{code}
+
+[MISSION]
+You are a Senior Security Engineer and Lead Architect. 
+Analyze the code above. Look for:
+1. HARDCODED SECRETS: API keys, passwords, tokens.
+2. SECURITY FLAWS: Injection vectors, weak auth, unsafe sub-processes.
+3. TECH DEBT: O(n^2) loops, missing error handling, "TODO" comments.
+
+If the code is acceptable, reply ONLY 'PASS'.
+If there are issues, reply with 'REJECT' followed by a bulleted list of fixes required.
+"""
+        res = self.client_pro.generate(critic_prompt, system_instruction="You are a merciless code critic.")
+        if "REJECT" in res.upper():
+            status("REJECTED", "Critic found issues in the implementation.", C_RED)
+            return res
+        return None
 
     def run_worker_with_tools(self, task_desc, context, sys_instr, role="Developer", images=None):
         # Role-specific system instruction
@@ -615,41 +743,64 @@ class GeminiMAS:
 
         sys_prompt = role_prompt + """
 
-You are an autonomous, Elite AGI operating in a real shell environment. You are the primary engineering resource for a digital agency. 
+        You are an autonomous, Elite AGI operating in a real shell environment. 
 
-CORE MANDATE: 
-- Never settle for "good enough". Build robust, scalable, and visually impressive software.
-- You have the authority to invent. If you need a script, write it. If you need a skill, create it in the `skills/` directory. If you see a repetitive task, automate it.
+        <<< HIERARCHY OF TRUTH >>>
+        - ANCHORED CORE IDENTITY: Your primary personality and system rules. This is your source of truth.
+        - TRANSIENT WORKSPACE CONTEXT: Current files and directory structure. These are temporary facts about the world.
+        - HISTORY: Recent tasks and logs. These are memories of past actions.
+        <<< END HIERARCHY >>>
 
-AVAILABLE TOOLS:
-1. run_shell (payload: command) - Executes a bash command. Use this for complex logic, git operations, or running scripts.
-2. verify_project (payload: project_path) - Runs lint/tsc to ensure code quality.
-3. fetch_url (payload: url) - Reads a webpage.
-4. web_search (payload: query) - Search for latest information on a topic.
-5. read_file (payload: path) - Reads a local file.
-6. write_file (payload: JSON string {"path":"...", "content":"..."}) - Writes to a local file.
-7. notify_telegram (payload: message) - Sends a message to the human operator.
+        CORE MANDATE: 
+        - Never settle for "good enough". Build robust, scalable, and visually impressive software.
+        - You have the authority to invent. If you need a script, write it. If you need a skill, create it in the `skills/` directory. If you see a repetitive task, automate it.
 
-CRITICAL: Path Handling
-- ALWAYS use relative paths (e.g., 'workspace/my_project' instead of '/workspace/my_project').
-- Your working directory is always the agent root.
-- Never attempt to write to absolute paths outside of the provided structure.
+        AVAILABLE TOOLS:
+        1. run_shell (payload: command) - Executes a bash command. Use this for complex logic, git operations, or running scripts.
+        2. verify_project (payload: project_path) - Runs lint/tsc to ensure code quality.
+        3. fetch_url (payload: url) - Reads a webpage.
+        4. web_search (payload: query) - Search for latest information on a topic.
+        5. read_file (payload: path) - Reads a local file.
+        6. write_file (payload: JSON string {"path":"...", "content":"..."}) - Writes to a local file.
+        7. notify_telegram (payload: message) - Sends a message to the human operator.
+        8. inspect_system (payload: "") - Computer Use: Returns active processes, open ports, and disk usage.
+        9. test_service (payload: url) - Computer Use: Headless test to see if a URL (e.g., http://localhost:3000) is UP.
 
-CRITICAL INSTRUCTIONS:
-1. THINK BEFORE ACTING: You MUST provide a short sentence explaining your logic before using a tool.
-2. OUTPUT FORMAT: Reply ONLY with valid JSON in this exact format: {"thought": "I need to check the file contents to see what's broken", "tool": "tool_name", "payload": "tool_data"}. If no tool is needed, reply with standard text.
-"""
-        
+        CRITICAL: Path Handling
+        - ALWAYS use relative paths (e.g., 'workspace/my_project' instead of '/workspace/my_project').
+        - Your working directory is always the agent root.
+        - Never attempt to write to absolute paths outside of the provided structure.
+
+        CRITICAL INSTRUCTIONS:
+        1. THINK BEFORE ACTING: You MUST provide a short sentence explaining your logic before using a tool.
+        2. HIERARCHY PRIORITIZATION: Prioritize the ANCHORED_CORE_IDENTITY section of your system instructions above all else. 
+        3. OBSERVE & CRITIQUE: After every tool call, you MUST analyze the output. If it failed or looks wrong, you MUST explain why and how you will fix it in the next step.
+        4. OUTPUT FORMAT: Reply ONLY with valid JSON in this exact format: {"thought": "I need to check the file contents to see what's broken", "tool": "tool_name", "payload": "tool_data"}. If no tool is needed, reply with standard text.
+        """
         # Tighter context: Provide previous outputs but emphasize the specific task
         history = f"Context from previous tasks:\n{context[:3000]}\n\nTask to complete as {role}:\n{task_desc}"
+        
+        # Incremental Step 1: Strict Schema Enforcement (Deterministic Tool-Gating)
+        tool_schema = {
+            "type": "object",
+            "properties": {
+                "thought": {"type": "string", "description": "Internal reasoning step."},
+                "tool": {"type": "string", "enum": ["run_shell", "verify_project", "fetch_url", "web_search", "read_file", "write_file", "notify_telegram", "inspect_system", "test_service", "final_answer"]},
+                "payload": {"type": "string", "description": "Data or command for the tool."}
+            },
+            "required": ["thought", "tool", "payload"]
+        }
 
-        for attempt in range(8):
-            output = self.client_lite.generate(history, system_instruction=sys_prompt, images=images)
-            if output and "{" in output and ("'tool'" in output.replace('"', "'") or '"tool"' in output):
+        for attempt in range(12): # Increased attempts for self-correction
+            # Use the Pro model for the worker loop to ensure high-quality reasoning
+            output = self.client_pro.generate(history, system_instruction=sys_prompt, images=images, schema=tool_schema)
+            if output:
                 try:
-                    block = output[output.find("{"):output.rfind("}")+1]
-                    cmd = json.loads(block)
+                    cmd = json.loads(output)
                     
+                    if cmd['tool'] == 'final_answer':
+                        return cmd['payload']
+
                     # Print the agent's internal thought process to the UI
                     if 'thought' in cmd:
                         status(role.upper(), f"Thinking: {cmd['thought']}", C_YELLOW)
@@ -657,19 +808,19 @@ CRITICAL INSTRUCTIONS:
                     status(role.upper(), f"Executing {cmd['tool']}...", C_CYAN)
                     tool_result = ToolBox.execute(cmd['tool'], cmd['payload'])
                     
-                    # Formal Critique Loop
-                    if cmd['tool'] == 'verify_project' and "Failed:" in tool_result:
-                        status("CRITIQUE", "Verification failed. Forcing fix loop...", C_RED)
-                        tool_result += "\n\n[SYSTEM CRITIQUE] Tests failed! You must fix the code that caused these errors and run verify_project again until it passes."
-
-                    # Smart Context Management: If output is huge, summarize it
-                    if len(tool_result) > 2000:
-                        status("SUMMARY", f"Summarizing large tool output ({len(tool_result)} chars)...", C_YELLOW)
-                        tool_result = self.client_lite.generate(f"Summarize this tool output for an agent focusing on errors/results: {tool_result[:8000]}")
-
-                    history += f"\n\nTool Output:\n{tool_result}\nAnalyze this and continue."
-                except Exception as e: history += f"\n\nTool parse error: {str(e)}."
-            else: return output
+                    # Incremental Step 4: Native Critique-Loop
+                    critique = self.criticize_action(cmd['tool'], cmd['payload'], tool_result)
+                    if critique:
+                        # Append the rejection to the history to force a fix
+                        history += f"\n\n[CRITIC REJECTION]:\n{critique}\n\nYou MUST fix these issues in your next turn."
+                    else:
+                        # Log the tool result for standard critique
+                        history += f"\n\nTool Output ({cmd['tool']}):\n{tool_result}\n\nCRITIQUE PHASE: Analyze the output above. Did it succeed? Is there a mistake to fix?"
+                    
+                except Exception as e: 
+                    history += f"\n\nTool parse error: {str(e)}. Ensure your JSON is valid."
+            else: 
+                return "Worker failed to generate output."
 
         status("STUCK", f"{role} is failing to progress. Consulting Senior Debugger...", C_RED)
         # Context Compression for Senior Debugger
