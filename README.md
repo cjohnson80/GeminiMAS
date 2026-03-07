@@ -1,16 +1,15 @@
-# GeminiMAS v8.2 (Distributed Swarm Edition)
+# ATLAS v9.0 (Elite AGI Swarm)
 
-GeminiMAS is a high-density, self-improving multi-agent system designed for low-resource hardware (like Intel Celeron). It delivers production-grade AI intelligence through an autonomous, self-healing loop and distributed command routing.
+ATLAS (Autonomous Technical Lead & Architect Swarm) is a high-density, self-improving multi-agent system designed for industrial-scale software delivery. It operates with surgical precision, utilizing a modular component vault and visual verification to build, verify, and deploy production-grade applications autonomously.
 
 ## 🚀 Key Features
-- **Evolution Protocol:** Proactive self-improvement where agents examine their source code, invent optimizations, and propose them via automated git branches.
-- **Distributed Swarm:** Address any machine in your network via Telegram (e.g., `MachineName: task`) with "Sticky Focus" routing.
-- **Role-Based Orchestration:** Complex tasks are broken down and assigned to specialized agents: **Architect**, **Developer**, and **Reviewer**.
-- **Multimodal Vision:** Submit images via Telegram or CLI (`/image`) for visual analysis and code refactoring.
-- **Auto-Verification:** Agents use the `verify_project` tool to run `tsc` and `lint` on their own code before marking tasks as complete.
-- **Superior Memory:** Enhanced semantic search with **Skill Injection** from the `/skills` directory.
-- **Robust Persistence:** DuckDB with WAL mode and intelligent retry logic ensures memory is shared safely across all processes.
-- **Senior Debugger:** Automatic consultation with **Gemini 3.5 Pro Preview** when worker agents encounter complex blockers.
+- **Elite Personality:** Operates as a Mission Commander with a confident, strategic, and surgical behavioral protocol.
+- **Modular Assembly Engine:** Builds websites block-by-block using a persistent **NextStep Component Vault**.
+- **Autonomous DevOps:** Provisions repositories, manages Git workflows, and deploys to production (Vercel) with zero human intervention.
+- **Visual Verification ("The Eye"):** Uses headless browser screenshots and vision models to audit its own UI/UX designs.
+- **Tapering Evolution:** A proactive research protocol that discovers new patterns and autonomously refactors its own source code.
+- **Distributed Swarm:** Address any machine in your network via Telegram or the modern **Next.js Web Interface**.
+- **Superior Memory:** Enhanced semantic search with **Skill Injection** and persistent DuckDB storage.
 
 ## 📦 Installation
 1. Clone this repo to your machine.
@@ -23,13 +22,14 @@ GeminiMAS is a high-density, self-improving multi-agent system designed for low-
    GEMINI_API_KEY="your_google_ai_studio_key"
    TELEGRAM_BOT_TOKEN="your_bot_token"
    TELEGRAM_USER_ID="your_user_id"
+   VERCEL_TOKEN="your_vercel_api_token"
    ```
 
-## ⌨️ Usage
-- **Interactive Shell:** `gagent` (supports real-time streaming and commands like `/config`, `/image`, `/disable`).
-- **Single Task:** `gagent "Your task here"`
-- **Distributed Commands:** On Telegram, prefix your message with a machine name (`Hostname: hello`) to shift focus to that specific node.
-- **Evolution:** Managed automatically by `gagent-heartbeat.service`.
+## 🖥️ Command Interface
+- **Modern Web UI:** Run `./start_web.sh` and visit `http://localhost:3000`.
+- **Interactive Shell:** `atlas` (supports real-time streaming and commands like `/config`, `/image`, `/projects`).
+- **Single Task:** `atlas "Your mission here"`
+- **Evolution:** Managed automatically by the `atlas` heartbeat daemon.
 
 ## 🧠 Memory & Skills
 - **Skills:** Add custom Markdown guides to `~/gemini_agents/skills/` to expand agent capabilities permanently.

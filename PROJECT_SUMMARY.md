@@ -1,33 +1,37 @@
-# GeminiMAS Core System Architecture Overview
+# ATLAS: System Architecture & Workspace Protocol
 
-This document outlines the primary architectural components, data flows, and dependencies for the GeminiMAS agent system, assuming a high-performance, thread-safe operation model.
+This document outlines the primary architectural components, data flows, and the organizational hierarchy of the ATLAS Elite Swarm.
 
-## 1. Core Components & Responsibilities
+## 1. THE IDENTITY BOUNDARY
+ATLAS maintains a strict logical separation between its internal reasoning engine and the client projects it builds.
 
-| Component | Path | Responsibility | Dependencies |
-| :--- | :--- | :--- | :--- |
-| **Core Engine** | `$AGENT_ROOT/bin/gemini_mas.py` | Primary decision-making, task dispatch, evolution logic. | All sub-modules, `cache_utils.py`, External APIs. |
-| **Telegram Gateway** | `$AGENT_ROOT/bin/tg_gateway.py` | Handles asynchronous I/O for human interaction. | `process_tg_response.py`, Network I/O. |
-| **Resource Monitor** | `$AGENT_ROOT/bin/monitor.py` | Tracks CPU/RAM utilization, feeds into `local_config.json`. | `monitor_resources.sh`, `logs/resource_monitor.log`. |
-| **Data Manager** | `$AGENT_ROOT/bin/db_manager.py` | Manages persistence and retrieval from the memory database. | `memory/memory.db`, `logger_setup.py`. |
-| **Configuration** | `$AGENT_ROOT/core/local_config.json` | Runtime configuration overrides (e.g., thread limits, feature toggles). | All modules. |
+### System Space (Identity)
+The following directories define the ATLAS entity. They are persistent, evolving, and separate from any specific mission.
+- **Engine (`bin/`):** The logic core (`gemini_mas.py`), API gateways (Next.js & Telegram), and specialized toolsets.
+- **Identity (`core/`):** The `SOUL.md` (behavioral protocol), configuration (`local_config.json`), and internal goal tracking (`HEARTBEAT.md`).
+- **Capabilities (`skills/`):** Atomic, high-level skill modules that Atlas can "inject" into its reasoning.
+- **Knowledge (`knowledge/`):** Summarized research data from the background Research Protocol.
+- **The Vault (`library/`):** A persistent repository of verified components and project blueprints.
+- **Persistence (`memory/`):** Persistent DuckDB storage for semantic memory and caching.
 
-## 2. Data Flow and Persistence
+### Mission Space (Workspace)
+- **Projects (`workspace/`):** Every client project is isolated within a sub-directory: `workspace/{project_name}/`.
+- All creative artifacts, website code, and databases built for clients MUST live here.
+- The workspace is ephemeral; it can be deleted or deployed without affecting the ATLAS identity.
 
-1.  **Input (Telegram/Shell):** Input is routed via `tg_gateway.py` or direct shell execution into the **Core Engine**.
-2.  **Processing:** The Core Engine consults **Memory** (`memory.db`) via `db_manager.py` for context and executes logic defined in `skills/`. Caching is managed by `cache_utils.py` to minimize redundant external calls.
-3.  **External I/O:** External API calls (e.g., research, generation) are mediated by the Core Engine, which must respect rate limits (429 error handling is critical).
-4.  **Logging & State:** All significant actions, configuration changes, and errors are logged to `/logs/` and state updates are persisted to `/data/state/`.
-5.  **Evolution:** Architectural changes are proposed by the Core Engine and committed to the repository structure, requiring explicit approval via `approval_manager.py` if security policies are involved.
+## 2. KEY DATA FLOWS
+1. **Command:** Input is received via CLI, Telegram, or the Next.js Web UI.
+2. **Triage:** Atlas identifies if the input is a Mission (TASK) or casual CHAT.
+3. **Targeting:** Atlas sets its focus to the specific mission directory in `workspace/`.
+4. **Execution:** Specialized Swarm agents (Architect, Developer, Reviewer) operate within that directory.
+5. **Learning:** High-value code patterns discovered in the workspace are extracted and saved to the **System Vault** (`library/`) for future reuse.
+6. **Deployment:** Once verified, the workspace artifacts are pushed to Git and deployed to production (Vercel).
 
-## 3. Current Architectural Constraint (API Quota Blocked)
+## 3. CORE TECHNOLOGY STACK
+*   **Engine:** Python 3.14 (Async/Multithreaded).
+*   **Intelligence:** Gemini 1.5 Pro (Multimodal Vision & Audio).
+*   **Persistence:** DuckDB + Polars.
+*   **Web Skin:** Next.js 15 + FastAPI + Tailwind CSS v4.
+*   **DevOps:** Playwright (Visual Audit), Vercel CLI, GitHub CLI.
 
-Due to an HTTP 429 error, external API access is paused for ~24 hours. The current operational focus shifts entirely to **Local Optimization and Internal Refactoring** as detailed in `workspace/default/24H_LOCAL_STRATEGY.md`. This includes: Refactoring `gemini_mas.py` for better thread utilization and ensuring data integrity checks on local databases.
-
-## 4. Dependencies Summary
-
-*   **Python:** Standard library + specific needs for concurrent execution (`concurrent.futures`).
-*   **External:** Primary dependency is the external LLM API; current operations are independent of it.
-*   **Shell:** Used for hardware monitoring (`monitor_resources.sh`) and system-level Git operations.
-
-This structure prioritizes resilience and mandates that all core logic be thread-safe, given the high-performance hardware profile.
+This structure ensures that ATLAS remains a high-performance, self-improving architect while maintaining perfect organization across any number of client missions.
