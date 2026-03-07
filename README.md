@@ -26,11 +26,29 @@ ATLAS (Autonomous Technical Lead & Architect Swarm) is a high-density, self-impr
    ```
 
 ## 🖥️ Command Interface
-- **Modern Web UI:** Run `./start_web.sh` and visit `http://localhost:3000`.
-- **Interactive Shell:** `atlas` (supports real-time streaming and commands like `/config`, `/image`, `/projects`).
-- **Single Task:** `atlas "Your mission here"`
-- **Evolution:** Managed automatically by the `atlas` heartbeat daemon.
+
+### 🌐 Web Dashboard
+Run `./start_web.sh` and visit `http://localhost:3000` for the high-fidelity Mission Control center, featuring live telemetry, sub-agent thought streaming, and visual mission previews.
+
+### 🛰️ Telegram Bot
+Control the swarm from your mobile device via the following commands:
+- `/projects` - List all active agency project workspaces.
+- `/project <name>` - Switch the active mission focus.
+- `/sh <command>` - Execute high-authority shell commands.
+- `/abort` - **Emergency Stop:** Instantly terminate the active mission.
+- `/approve <branch>` - Merge a verified evolution patch into the core.
+
+### ⌨️ CLI (Terminal)
+- `atlas "Your mission here"` - Launch a new autonomous operation.
+- `atlas sentinel status` - Check the health of the self-healing watchdog.
+
+## 🛡️ Resilience & Performance
+- **Atlas Sentinel:** A background watchdog (`bin/sentinel.py`) that monitors all ports and automatically resurrects the API, Frontend, or Bot if they crash.
+- **Mission Blackboard:** A real-time "War Room" (Redis-backed) where all sub-agents share strategic context and thoughts to ensure global awareness.
+- **Speculative Execution:** A predictive engine that anticipates setup tasks (like scaffolding) and executes them in the background while the Architect is still planning.
+- **Persistent Daemon:** The Atlas engine remains resident in memory for instantaneous, zero-latency command responses.
 
 ## 🧠 Memory & Skills
-- **Skills:** Add custom Markdown guides to `~/atlas_agents/skills/` to expand agent capabilities permanently.
-- **Memory:** All interactions are semantically indexed and stored in `~/atlas_agents/memory/memory.db`.
+- **NextStep Vault:** A persistent `library/` of verified components and blueprints that Atlas uses to build industrial-scale apps block-by-block.
+- **Skills:** Add custom Markdown guides to `skills/` to expand swarm capabilities permanently.
+- **Evolution:** Atlas autonomously researches, codes, and verifies its own source code improvements.
