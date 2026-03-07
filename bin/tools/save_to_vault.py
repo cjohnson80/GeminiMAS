@@ -3,7 +3,7 @@ import json
 import sys
 
 # To allow importing from parent bin dir if needed, but we'll try to keep it simple
-# Dynamic tools are executed within the context of gemini_mas usually
+# Dynamic tools are executed within the context of atlas_core usually
 
 def execute(payload):
     """

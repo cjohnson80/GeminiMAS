@@ -1,8 +1,8 @@
 import time
 import threading
-from gemini_mas import GeminiMAS
+from atlas_core import AtlasSwarm
 
-class GeminiMASWrapper:
+class AtlasSwarmWrapper:
     def __init__(self, api_key, max_threads=2):
         self.api_key = api_key
         self.max_threads = max_threads
@@ -13,7 +13,7 @@ class GeminiMASWrapper:
         delay = 1
         for i in range(retries):
             try:
-                self.mas = GeminiMAS(self.api_key)
+                self.mas = AtlasSwarm(self.api_key)
                 return
             except Exception as e:
                 if i == retries - 1: raise e

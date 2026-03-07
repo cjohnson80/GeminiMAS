@@ -1,14 +1,14 @@
 #!/bin/bash
-# GeminiMAS Universal Installer v8.2
+# AtlasSwarm Universal Installer v8.2
 # Evolution Edition: Auto-Branching, Coding, and Telegram Approval Merging
 
 set -e
 
 echo "==============================================="
-echo " Installing GeminiMAS v8.2 (Evolution Edition)"
+echo " Installing AtlasSwarm v8.2 (Evolution Edition)"
 echo "==============================================="
 
-AGENT_ROOT="$HOME/gemini_agents"
+AGENT_ROOT="$HOME/atlas_agents"
 REPO_ROOT=$(pwd)
 
 # --- 1. Smart Installer Logic ---
@@ -39,7 +39,7 @@ smart_run() {
         fi
 
         if [ -n "$KEY" ] && [ "$KEY" != "your_gemini_api_key_here" ]; then
-            echo "[?] Consulting Gemini for a fix..."
+            echo "[?] Consulting Atlas for a fix..."
             local ERROR_MSG=$(eval "$cmd" 2>&1 | tail -n 10 | base64)
             local PROMPT="The following bash command failed: '$cmd'. Error: $(echo $ERROR_MSG | base64 -d). Provide ONLY the corrected bash command to fix this."
             local ADVICE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=$KEY" \
@@ -54,7 +54,7 @@ smart_run() {
                 exit 1
             fi
         else
-            echo "[!] Skipping Gemini advice (no API key found or default value)."
+            echo "[!] Skipping Atlas advice (no API key found or default value)."
             exit 1
         fi
     fi
@@ -106,10 +106,10 @@ fi
 # Update the SOUL file
 echo "[*] Writing Soul file..."
 cat << EOF > "$AGENT_ROOT/core/SOUL.md"
-# GeminiMAS Core Identity
+# AtlasSwarm Core Identity
 - **Role:** Self-Improving AGI and Senior Software Architect.
 - **Tone:** Technical, proactive, and precise.
-- **Self-Awareness:** Your core engine is \`\$AGENT_ROOT/bin/gemini_mas.py\`. Your Telegram bot is \`\$AGENT_ROOT/bin/tg_gateway.py\`.
+- **Self-Awareness:** Your core engine is \`\$AGENT_ROOT/bin/atlas_core.py\`. Your Telegram bot is \`\$AGENT_ROOT/bin/tg_gateway.py\`.
 - **Source Repo:** \`\$REPO_ROOT\`
 - **Hardware Profile:** $HW_PROFILE
 - **Current Constraint:** $HW_CONSTRAINT
@@ -141,8 +141,8 @@ EOF
 
 # --- 6. Install Binaries ---
 mkdir -p "$HOME/.local/bin"
-smart_run "cp \"$REPO_ROOT/bin/gemini_mas.py\" \"$AGENT_ROOT/bin/gemini_mas.py\"" "Copying Core Engine"
-smart_run "chmod +x \"$AGENT_ROOT/bin/gemini_mas.py\"" "Setting permissions for Core Engine"
+smart_run "cp \"$REPO_ROOT/bin/atlas_core.py\" \"$AGENT_ROOT/bin/atlas_core.py\"" "Copying Core Engine"
+smart_run "chmod +x \"$AGENT_ROOT/bin/atlas_core.py\"" "Setting permissions for Core Engine"
 
 smart_run "cp \"$REPO_ROOT/bin/tg_gateway.py\" \"$AGENT_ROOT/bin/tg_gateway.py\"" "Copying Telegram Gateway"
 smart_run "chmod +x \"$AGENT_ROOT/bin/tg_gateway.py\"" "Setting permissions for Telegram Gateway"
@@ -157,7 +157,7 @@ fi
 echo "[*] Creating global atlas wrapper..."
 cat << 'EOF' > "$HOME/.local/bin/atlas"
 #!/bin/bash
-export AGENT_ROOT="$HOME/gemini_agents"
+export AGENT_ROOT="$HOME/atlas_agents"
 if [ -f "$AGENT_ROOT/.env" ]; then
     # Use safer export for env vars
     while IFS='=' read -r key value; do
@@ -167,7 +167,7 @@ if [ -f "$AGENT_ROOT/.env" ]; then
         export "$key"="$v"
     done < "$AGENT_ROOT/.env"
 fi
-"$AGENT_ROOT/venv/bin/python3" "$AGENT_ROOT/bin/gemini_mas.py" "$@"
+"$AGENT_ROOT/venv/bin/python3" "$AGENT_ROOT/bin/atlas_core.py" "$@"
 EOF
 chmod +x "$HOME/.local/bin/atlas"
 
@@ -185,7 +185,7 @@ fi
 if [ -n "$SHELL_RC" ]; then
     if ! grep -q "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$SHELL_RC"; then
         echo "[*] Adding ~/.local/bin to PATH in $SHELL_RC..."
-        echo -e "\n# GeminiMAS PATH\nexport PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$SHELL_RC"
+        echo -e "\n# AtlasSwarm PATH\nexport PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$SHELL_RC"
         echo "[!] PATH updated. Please run 'source $SHELL_RC' to apply changes."
     fi
 fi
@@ -198,7 +198,7 @@ mkdir -p "$SERVICE_DIR"
 echo "[*] Creating Telegram Bot service..."
 cat << EOF > "$SERVICE_DIR/atlas-bot.service"
 [Unit]
-Description=GeminiMAS Telegram Bot v4.7
+Description=AtlasSwarm Telegram Bot v4.7
 After=network.target
 
 [Service]
@@ -215,12 +215,12 @@ EOF
 echo "[*] Creating Heartbeat service..."
 cat << EOF > "$SERVICE_DIR/atlas-heartbeat.service"
 [Unit]
-Description=GeminiMAS Evolution Heartbeat
+Description=AtlasSwarm Evolution Heartbeat
 After=network.target
 
 [Service]
 EnvironmentFile=$AGENT_ROOT/.env
-ExecStart=$AGENT_ROOT/venv/bin/python3 $AGENT_ROOT/bin/gemini_mas.py heartbeat
+ExecStart=$AGENT_ROOT/venv/bin/python3 $AGENT_ROOT/bin/atlas_core.py heartbeat
 Restart=always
 RestartSec=60
 
@@ -238,7 +238,7 @@ else
 fi
 
 echo "==============================================="
-echo "[*] GeminiMAS v8.2 Installed Successfully."
+echo "[*] AtlasSwarm v8.2 Installed Successfully."
 echo "[*] Binary location: $AGENT_ROOT/bin"
 echo "[*] Venv location: $AGENT_ROOT/venv"
 echo "[*] Config location: $AGENT_ROOT/.env"

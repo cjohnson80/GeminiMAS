@@ -23,7 +23,7 @@ def execute(payload):
         if not blueprint_name or not target_dir:
             return "Error: 'blueprint_name' and 'target_dir' are required."
             
-        agent_root = os.path.expanduser("~/gemini_agents")
+        agent_root = os.getenv("AGENT_ROOT", os.path.expanduser("~/atlas_agents"))
         source_dir = os.path.join(agent_root, "library", "blueprints", blueprint_name)
         target_full_path = os.path.join(agent_root, target_dir)
         

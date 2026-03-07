@@ -7,7 +7,7 @@ ATLAS maintains a strict logical separation between its internal reasoning engin
 
 ### System Space (Identity)
 The following directories define the ATLAS entity. They are persistent, evolving, and separate from any specific mission.
-- **Engine (`bin/`):** The logic core (`gemini_mas.py`), API gateways (Next.js & Telegram), and specialized toolsets.
+- **Engine (`bin/`):** The logic core (`atlas_core.py`), API gateways (Next.js & Telegram), and specialized toolsets.
 - **Identity (`core/`):** The `SOUL.md` (behavioral protocol), configuration (`local_config.json`), and internal goal tracking (`HEARTBEAT.md`).
 - **Capabilities (`skills/`):** Atomic, high-level skill modules that Atlas can "inject" into its reasoning.
 - **Knowledge (`knowledge/`):** Summarized research data from the background Research Protocol.
@@ -29,7 +29,7 @@ The following directories define the ATLAS entity. They are persistent, evolving
 
 ## 3. CORE TECHNOLOGY STACK
 *   **Engine:** Python 3.14 (Async/Multithreaded).
-*   **Intelligence:** Gemini 1.5 Pro (Multimodal Vision & Audio).
+*   **Intelligence:** Atlas 1.5 Pro (Multimodal Vision & Audio).
 *   **Persistence:** DuckDB + Polars.
 *   **Web Skin:** Next.js 15 + FastAPI + Tailwind CSS v4.
 *   **DevOps:** Playwright (Visual Audit), Vercel CLI, GitHub CLI.

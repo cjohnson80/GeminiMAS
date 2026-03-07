@@ -40,9 +40,9 @@ async def celeron_watchdog(threshold_mb=150, check_interval_sec=30):
             await asyncio.sleep(5)
 
 # Distributed Config
-REPO_PATH = os.path.expanduser('~/GeminiMAS_Repo')
+REPO_PATH = os.path.expanduser('~/AtlasSwarm_Repo')
 MAILBOX_PATH = os.path.join(REPO_PATH, 'mailbox')
-FOCUS_FILE = os.path.join(os.path.expanduser('~/gemini_agents/core'), 'current_focus.json')
+FOCUS_FILE = os.path.join(os.path.expanduser('~/atlas_agents/core'), 'current_focus.json')
 MY_HOSTNAME = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
 
 semaphore = asyncio.Semaphore(2)
@@ -114,8 +114,8 @@ async def route_to_machine(target_name, command, update):
 
     await status_msg.edit_text(f"[{MY_HOSTNAME}] Timeout: {target_name} did not respond. Check its heartbeat.")
 
-CURRENT_PROJECT_FILE = os.path.join(os.path.expanduser('~/gemini_agents/core'), 'current_project.txt')
-WORKSPACE_DIR = os.path.expanduser('~/gemini_agents/workspace')
+CURRENT_PROJECT_FILE = os.path.join(os.path.expanduser('~/atlas_agents/core'), 'current_project.txt')
+WORKSPACE_DIR = os.path.expanduser('~/atlas_agents/workspace')
 
 async def project_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update): return
@@ -154,6 +154,16 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Successfully merged evolution: {branch_name}. System updated.")
 
 
+async def abort_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update): return
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            await client.post("http://localhost:8000/abort")
+        await update.message.reply_text("🚨 EMERGENCY STOP: Abort signal transmitted to Atlas Swarm.")
+    except Exception as e:
+        await update.message.reply_text(f"Error sending abort signal: {e}")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update): return
     if not update.message or not update.message.text: return
@@ -188,71 +198,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             typing_task = asyncio.create_task(context.bot.send_chat_action(chat_id=update.effective_message.chat_id, action="typing"))
             
             try:
-                cmd_executable = "atlas" if subprocess.run(["which", "atlas"], capture_output=True).returncode == 0 else sys.executable
-                mas_path = os.path.expanduser('~/gemini_agents/bin/gemini_mas.py')
-                venv_python = os.path.expanduser('~/gemini_agents/venv/bin/python3')
-                python_cmd = venv_python if os.path.exists(venv_python) else sys.executable
-
-                if cmd_executable == "atlas":
-                    proc = await asyncio.create_subprocess_exec(cmd_executable, "--prompt", text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                else:
-                    proc = await asyncio.create_subprocess_exec(python_cmd, mas_path, '--prompt', text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
+                import httpx
                 full_output = []
                 last_update_time = time.time()
                 
-                import re
-                ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    async with client.stream("POST", "http://localhost:8000/prompt", json={
+                        "message": text,
+                        "project": curr_p
+                    }) as response:
+                        async for line in response.aiter_lines():
+                            if not line: continue
+                            update_data = json.loads(line)
+                            
+                            if update_data['type'] == 'chunk':
+                                full_output.append(update_data['msg'])
+                            
+                            # Update Telegram every 3 seconds if there's new important info
+                            if time.time() - last_update_time > 3.0:
+                                display_text = f"[ATLAS @ {MY_HOSTNAME}] 🧠 Working...\n"
+                                
+                                # Use high-level progress info for the status msg
+                                if update_data['type'] == 'thought':
+                                    display_text += f"\n💭 *Thought:* {update_data['msg'][:200]}..."
+                                elif update_data['type'] == 'action':
+                                    display_text += f"\n⚙️ *Action:* Executing {update_data['tool']}..."
+                                elif update_data['type'] == 'status':
+                                    display_text += f"\n[*] *{update_data['tag']}:* {update_data['msg'][:200]}..."
+                                
+                                try:
+                                    await status_msg.edit_text(display_text[:4096], parse_mode='Markdown')
+                                    last_update_time = time.time()
+                                except: pass
 
-                while True:
-                    line = await proc.stdout.readline()
-                    if not line:
-                        break
-                    
-                    line_text = line.decode('utf-8', errors='replace').strip()
-                    clean_line = ansi_escape.sub('', line_text)
-                    full_output.append(clean_line)
-                    
-                    # Update Telegram every 3 seconds if there's new important info
-                    if time.time() - last_update_time > 3.0:
-                        # Extract the last "thought" or status
-                        display_text = f"[ATLAS @ {MY_HOSTNAME}] 🧠 Working...\n"
-                        # Look for the last thinking step
-                        thought = next((l for l in reversed(full_output) if "THINKING" in l), None)
-                        if thought:
-                            thought_msg = thought.split("]", 1)[-1].strip()
-                            display_text += f"\n💭 *Thought:* {thought_msg}"
-                        
-                        # Look for current execution step
-                        exec_step = next((l for l in reversed(full_output) if "Executing" in l), None)
-                        if exec_step:
-                            exec_msg = exec_step.split("]", 1)[-1].strip()
-                            display_text += f"\n⚙️ *Action:* {exec_msg}"
-                        
-                        try:
-                            await status_msg.edit_text(display_text[:4096], parse_mode='Markdown')
-                            last_update_time = time.time()
-                        except:
-                            pass # Ignore "message is not modified" errors
-
-                _, stderr = await proc.communicate()
-                err_str = stderr.decode('utf-8', errors='replace').strip()
-                
-                final_response = "\n".join(full_output) or f"Error: {err_str}"
+                final_response = "".join(full_output)
                 if not final_response: final_response = "Core engine returned empty response."
                 
-                # Try to extract the ACTUAL answer from the full output
-                # Usually it's everything after the last "Executing final_answer..." or similar
-                # Or just send the whole thing if it's not too long
                 if len(final_response) > 4000:
                     final_response = final_response[-4000:]
                 
                 await status_msg.edit_text(final_response)
             except Exception as e:
-                import traceback
-                logger.error(f"Error handling message: {e}\n{traceback.format_exc()}")
+                logger.error(f"Error handling message via Daemon: {e}")
                 if status_msg:
-                    await status_msg.edit_text(f"Error: {str(e)}")
+                    await status_msg.edit_text(f"Daemon Error: {str(e)}")
             finally:
                 typing_task.cancel()
     else:
@@ -263,36 +252,36 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update): return
 
     photo_file = await update.message.photo[-1].get_file()
-    img_path = os.path.expanduser(f'~/gemini_agents/workspace/tg_image_{int(time.time())}.jpg')
+    img_path = os.path.expanduser(f'~/atlas_agents/workspace/tg_image_{int(time.time())}.jpg')
     os.makedirs(os.path.dirname(img_path), exist_ok=True)
     await photo_file.download_to_drive(img_path)
 
     caption = update.message.caption or "Analyze this image."
-    status_msg = await update.message.reply_text(f"[{MY_HOSTNAME}] Image received. Thinking...")
+    status_msg = await update.message.reply_text(f"[{MY_HOSTNAME}] Image received. Processing via Daemon...")
 
-    mas_path = os.path.expanduser('~/gemini_agents/bin/gemini_mas.py')
     async with semaphore:
         try:
-            # Call core engine with image
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, mas_path, '--prompt', caption, '--image', img_path,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+            import httpx
+            full_output = []
             
-            # Robust decoding and truncation
-            out_str = stdout.decode('utf-8', errors='replace').strip()
-            err_str = stderr.decode('utf-8', errors='replace').strip()
-            
-            response = out_str or f"Error: {err_str}"
-            if not response: response = "Core engine returned empty response."
-            
-            await status_msg.edit_text(response[:4096])
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                async with client.stream("POST", "http://localhost:8000/prompt", json={
+                    "message": caption,
+                    "project": get_focus(),
+                    "image_path": img_path # Note: Added image_path to the gateway but need to ensure it's handled
+                }) as response:
+                    async for line in response.aiter_lines():
+                        if not line: continue
+                        update_data = json.loads(line)
+                        if update_data['type'] == 'chunk':
+                            full_output.append(update_data['msg'])
+
+            response_text = "".join(full_output) or "Core engine returned empty response."
+            await status_msg.edit_text(response_text[:4096])
         except Exception as e:
-            import traceback
-            logger.error(f"Error handling photo: {e}\n{traceback.format_exc()}")
+            logger.error(f"Error handling photo via Daemon: {e}")
             if status_msg:
-                await status_msg.edit_text(f"Error: {str(e)}")
+                await status_msg.edit_text(f"Daemon Error: {str(e)}")
 
 
 async def sh_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -375,6 +364,7 @@ async def main():
     await log_identity()
 
     app.add_handler(CommandHandler("approve", approve_command))
+    app.add_handler(CommandHandler("abort", abort_command))
     app.add_handler(CommandHandler("project", project_command))
     app.add_handler(CommandHandler("projects", list_projects))
     app.add_handler(CommandHandler("sh", sh_command))

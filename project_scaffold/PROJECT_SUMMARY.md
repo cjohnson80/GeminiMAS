@@ -14,7 +14,7 @@ Until the quota resets, execution focus shifts entirely to internal development,
 
 | Component | Function | Dependencies | Output/Storage |
 | :--- | :--- | :--- | :--- |
-| `gemini_mas.py` | Core Execution Loop | `tg_gateway.py`, `cache_utils.py`, `db_manager.py` | Logs, Workspace, Memory DB |
+| `atlas_core.py` | Core Execution Loop | `tg_gateway.py`, `cache_utils.py`, `db_manager.py` | Logs, Workspace, Memory DB |
 | `tg_gateway.py` | User I/O Interface | Telegram API | Input queue, Notification output |
 | `db_manager.py` | Persistent State Management | `memory.db` | State snapshots, Query results |
 | `cache_utils.py` | High-Speed Data Retrieval | In-memory dictionary/Redis (if implemented) | Fast lookups for recurring data |

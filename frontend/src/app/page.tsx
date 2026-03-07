@@ -17,7 +17,10 @@ import {
   Mic,
   MicOff,
   Radio,
-  MessageSquare
+  MessageSquare,
+  Eye,
+  X,
+  AlertTriangle
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { clsx, type ClassValue } from "clsx";
@@ -45,8 +48,16 @@ export default function AtlasControl() {
   const [isTyping, setIsTyping] = useState(false);
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [systemStatus, setSystemStatus] = useState<any>(null);
-  
-  // Voice State
+  const [showPreview, setShowPreview] = useState(false);
+
+  const abortMission = async () => {
+    if (!confirm("🚨 Are you sure you want to ABORT the active mission?")) return;
+    try {
+      await fetch("http://localhost:8000/abort", { method: "POST" });
+      alert("Abort signal transmitted.");
+    } catch (e) { console.error(e); }
+  };
+
   const [isRecording, setIsRecording] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
@@ -68,7 +79,14 @@ export default function AtlasControl() {
     
     socket.onmessage = (event) => {
       const update = JSON.parse(event.data);
-      handleSwarmUpdate(update);
+      if (update.type === "telemetry") {
+        setSystemStatus((prev: any) => ({
+          ...prev,
+          live: update
+        }));
+      } else {
+        handleSwarmUpdate(update);
+      }
     };
     
     socket.onclose = () => {
@@ -281,17 +299,39 @@ export default function AtlasControl() {
         </div>
 
         {/* System Stats Footer */}
-        <div className="p-4 border-t border-zinc-800 bg-[#0a0a0a] space-y-2">
-          <div className="flex items-center justify-between text-[10px] font-medium">
-            <span className="text-zinc-500 flex items-center gap-1.5"><Cpu className="w-3 h-3" /> CPU Load</span>
-            <span className="text-green-500">{systemStatus?.hardware?.cpu_count || 0} Cores</span>
+        <div className="p-4 border-t border-zinc-800 bg-[#0a0a0a] space-y-3">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-[10px] font-medium">
+              <span className="text-zinc-500 flex items-center gap-1.5"><Cpu className="w-3 h-3" /> CPU Load</span>
+              <span className={cn(
+                "font-mono",
+                (systemStatus?.live?.cpu || 0) > 70 ? "text-red-500" : "text-green-500"
+              )}>{systemStatus?.live?.cpu?.toFixed(1) || 0}%</span>
+            </div>
+            <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-blue-500 transition-all duration-1000" 
+                style={{ width: `${systemStatus?.live?.cpu || 0}%` }}
+              />
+            </div>
           </div>
-          <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
-            <div className="h-full bg-blue-500 w-[15%]" />
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-[10px] font-medium">
+              <span className="text-zinc-500 flex items-center gap-1.5"><Zap className="w-3 h-3" /> RAM Usage</span>
+              <span className="text-zinc-300 font-mono">{systemStatus?.live?.ram?.toFixed(1) || 0}%</span>
+            </div>
+            <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-purple-500 transition-all duration-1000" 
+                style={{ width: `${systemStatus?.live?.ram || 0}%` }}
+              />
+            </div>
           </div>
+
           <div className="flex items-center justify-between text-[10px] font-medium pt-1">
-            <span className="text-zinc-500 flex items-center gap-1.5"><Activity className="w-3 h-3" /> Status</span>
-            <span className="text-blue-400 uppercase tracking-tighter">Ready</span>
+            <span className="text-zinc-500 flex items-center gap-1.5"><Activity className="w-3 h-3" /> Swarm Status</span>
+            <span className="text-blue-400 uppercase tracking-tighter animate-pulse">Synchronized</span>
           </div>
         </div>
       </aside>
@@ -307,87 +347,126 @@ export default function AtlasControl() {
             </div>
           </div>
           <div className="flex items-center gap-4">
+            <button 
+              onClick={abortMission}
+              className="p-2 rounded-lg text-zinc-500 hover:text-red-500 hover:bg-red-500/10 transition-all"
+              title="Abort Mission"
+            >
+              <AlertTriangle className="w-5 h-5" />
+            </button>
+            <button 
+              onClick={() => setShowPreview(!showPreview)}
+              className={cn(
+                "p-2 rounded-lg transition-colors",
+                showPreview ? "bg-blue-600 text-white" : "text-zinc-400 hover:text-white hover:bg-zinc-800"
+              )}
+              title="Toggle Mission Preview"
+            >
+              <Eye className="w-5 h-5" />
+            </button>
             <button className="text-zinc-400 hover:text-white transition-colors"><Settings className="w-5 h-5" /></button>
           </div>
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-8 space-y-8 scroll-smooth">
-          {messages.length === 0 && (
-            <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto space-y-4">
-              <div className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl flex items-center justify-center mb-4">
-                <BrainCircuit className="w-8 h-8 text-blue-500" />
-              </div>
-              <h2 className="text-2xl font-bold text-white tracking-tight">Welcome to Atlas Control</h2>
-              <p className="text-zinc-400 text-sm leading-relaxed">
-                Atlas is currently synchronized with the swarm. Direct the agency to begin autonomous operations or research via text or voice.
-              </p>
-            </div>
-          )}
-
-          {messages.map((m) => (
-            <div key={m.id} className={cn("max-w-3xl mx-auto flex gap-4", m.role === "user" ? "justify-end" : "justify-start")}>
-              {m.role === "atlas" && (
-                <div className="w-8 h-8 rounded-lg bg-blue-600 flex-shrink-0 flex items-center justify-center mt-1">
-                  <Bot className="w-5 h-5 text-white" />
+        <div className="flex-1 flex overflow-hidden">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-8 space-y-8 scroll-smooth">
+            {messages.length === 0 && (
+              <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto space-y-4">
+                <div className="w-16 h-16 bg-zinc-900 border border-zinc-800 rounded-2xl flex items-center justify-center mb-4">
+                  <BrainCircuit className="w-8 h-8 text-blue-500" />
                 </div>
-              )}
-              
-              <div className={cn("flex flex-col space-y-3 max-w-[90%]", m.role === "user" ? "items-end" : "items-start")}>
-                <div className={cn(
-                  "p-4 rounded-2xl text-sm leading-relaxed",
-                  m.role === "user" ? "bg-zinc-800 text-white" : "bg-transparent text-zinc-200 border border-transparent"
-                )}>
-                  {m.role === "atlas" ? (
-                    <div className="prose prose-invert prose-sm max-w-none">
-                      <ReactMarkdown>{m.content}</ReactMarkdown>
-                      {!m.completed && !m.content && (
-                        <div className="flex gap-1 items-center py-2">
-                          <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce" />
-                          <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:0.2s]" />
-                          <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:0.4s]" />
+                <h2 className="text-2xl font-bold text-white tracking-tight">Welcome to Atlas Control</h2>
+                <p className="text-zinc-400 text-sm leading-relaxed">
+                  Atlas is currently synchronized with the swarm. Direct the agency to begin autonomous operations or research via text or voice.
+                </p>
+              </div>
+            )}
+
+            {messages.map((m) => (
+              <div key={m.id} className={cn("max-w-3xl mx-auto flex gap-4", m.role === "user" ? "justify-end" : "justify-start")}>
+                {m.role === "atlas" && (
+                  <div className="w-8 h-8 rounded-lg bg-blue-600 flex-shrink-0 flex items-center justify-center mt-1">
+                    <Bot className="w-5 h-5 text-white" />
+                  </div>
+                )}
+                
+                <div className={cn("flex flex-col space-y-3 max-w-[90%]", m.role === "user" ? "items-end" : "items-start")}>
+                  <div className={cn(
+                    "p-4 rounded-2xl text-sm leading-relaxed",
+                    m.role === "user" ? "bg-zinc-800 text-white" : "bg-transparent text-zinc-200 border border-transparent"
+                  )}>
+                    {m.role === "atlas" ? (
+                      <div className="prose prose-invert prose-sm max-w-none">
+                        <ReactMarkdown>{m.content}</ReactMarkdown>
+                        {!m.completed && !m.content && (
+                          <div className="flex gap-1 items-center py-2">
+                            <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce" />
+                            <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:0.2s]" />
+                            <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:0.4s]" />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      m.content
+                    )}
+                  </div>
+
+                  {/* Sub-steps / Thoughts / Actions */}
+                  {m.role === "atlas" && (
+                    <div className="space-y-2 w-full">
+                      {m.thoughts?.map((t, i) => (
+                        <div key={i} className="flex items-start gap-2 bg-yellow-500/5 border border-yellow-500/10 p-3 rounded-xl">
+                          <div className="mt-0.5"><BrainCircuit className="w-3.5 h-3.5 text-yellow-500/60" /></div>
+                          <p className="text-[12px] text-yellow-200/70 italic leading-snug">{t}</p>
+                        </div>
+                      ))}
+                      {m.actions?.map((a, i) => (
+                        <div key={i} className="flex items-center gap-2 bg-blue-500/5 border border-blue-500/10 px-3 py-2 rounded-xl">
+                          <Terminal className="w-3.5 h-3.5 text-blue-500/60" />
+                          <div className="flex gap-2 text-[11px] font-mono">
+                            <span className="text-blue-400 font-bold uppercase">{a.tool}</span>
+                            <span className="text-zinc-500 truncate max-w-[200px]">{a.payload}</span>
+                          </div>
+                        </div>
+                      ))}
+                      {m.status && !m.completed && (
+                        <div className="flex items-center gap-2 px-3 text-[11px] text-zinc-500 font-medium">
+                          <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
+                          {m.status}
                         </div>
                       )}
                     </div>
-                  ) : (
-                    m.content
                   )}
                 </div>
 
-                {/* Sub-steps / Thoughts / Actions */}
-                {m.role === "atlas" && (
-                  <div className="space-y-2 w-full">
-                    {m.thoughts?.map((t, i) => (
-                      <div key={i} className="flex items-start gap-2 bg-yellow-500/5 border border-yellow-500/10 p-3 rounded-xl">
-                        <div className="mt-0.5"><BrainCircuit className="w-3.5 h-3.5 text-yellow-500/60" /></div>
-                        <p className="text-[12px] text-yellow-200/70 italic leading-snug">{t}</p>
-                      </div>
-                    ))}
-                    {m.actions?.map((a, i) => (
-                      <div key={i} className="flex items-center gap-2 bg-blue-500/5 border border-blue-500/10 px-3 py-2 rounded-xl">
-                        <Terminal className="w-3.5 h-3.5 text-blue-500/60" />
-                        <div className="flex gap-2 text-[11px] font-mono">
-                          <span className="text-blue-400 font-bold uppercase">{a.tool}</span>
-                          <span className="text-zinc-500 truncate max-w-[200px]">{a.payload}</span>
-                        </div>
-                      </div>
-                    ))}
-                    {m.status && !m.completed && (
-                      <div className="flex items-center gap-2 px-3 text-[11px] text-zinc-500 font-medium">
-                        <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
-                        {m.status}
-                      </div>
-                    )}
+                {m.role === "user" && (
+                  <div className="w-8 h-8 rounded-lg bg-zinc-800 flex-shrink-0 flex items-center justify-center mt-1">
+                    <User className="w-5 h-5 text-zinc-400" />
                   </div>
                 )}
               </div>
+            ))}
+          </div>
 
-              {m.role === "user" && (
-                <div className="w-8 h-8 rounded-lg bg-zinc-800 flex-shrink-0 flex items-center justify-center mt-1">
-                  <User className="w-5 h-5 text-zinc-400" />
+          {/* Preview Slide-over */}
+          {showPreview && (
+            <div className="w-[500px] border-l border-zinc-800 bg-[#0d0d0d] flex flex-col animate-in slide-in-from-right duration-300">
+              <div className="h-12 border-b border-zinc-800 flex items-center justify-between px-4">
+                <span className="text-xs font-bold uppercase tracking-widest text-zinc-500">Live Mission Preview</span>
+                <button onClick={() => setShowPreview(false)} className="text-zinc-500 hover:text-white"><X className="w-4 h-4" /></button>
+              </div>
+              <div className="flex-1 bg-white relative">
+                <iframe 
+                  src="http://localhost:3001" 
+                  className="w-full h-full border-none"
+                  title="Atlas Mission Preview"
+                />
+                <div className="absolute top-2 right-2 bg-black/50 backdrop-blur-md px-2 py-1 rounded text-[10px] text-white font-mono">
+                  PORT: 3001
                 </div>
-              )}
+              </div>
             </div>
-          ))}
+          )}
         </div>
 
         {/* Input Area */}

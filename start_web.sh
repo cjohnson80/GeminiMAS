@@ -23,4 +23,9 @@ echo "[+] Atlas Web Control is ready!"
 echo "[+] Backend URL: http://localhost:8000"
 echo "[+] Frontend URL: http://localhost:3000"
 echo "[*] PIDs: Backend($BACKEND_PID) Frontend($FRONTEND_PID)"
+
+# 3. Start Sentinel (Self-Healing)
+echo "[*] Initializing Atlas Sentinel (Self-Healing)..."
+nohup /home/chrisj/atlas_agents/venv/bin/python3 /home/chrisj/atlas_agents/bin/sentinel.py > logs/sentinel.out 2>&1 &
+
 echo "[*] Use 'tail -f logs/api_gateway.log' to monitor backend."

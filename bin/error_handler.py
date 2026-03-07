@@ -1,7 +1,7 @@
 import logging
 import sys
 
-logging.basicConfig(filename='/home/chrisj/GeminiMAS_Repo/logs/gemini_mas.log', level=logging.ERROR)
+logging.basicConfig(filename='/home/chrisj/AtlasSwarm_Repo/logs/atlas_core.log', level=logging.ERROR)
 
 def safe_execute(func, *args, **kwargs):
     try:

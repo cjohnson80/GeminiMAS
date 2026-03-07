@@ -24,7 +24,7 @@ import duckdb
 import polars as pl
 
 # Configuration
-AGENT_ROOT = os.path.expanduser("~/gemini_agents")
+AGENT_ROOT = os.getenv("AGENT_ROOT", os.path.expanduser("~/atlas_agents"))
 WORKSPACE = os.path.join(AGENT_ROOT, "workspace")
 DB_FILE = os.path.join(AGENT_ROOT, "memory/memory.db")
 SOUL_FILE = os.path.join(AGENT_ROOT, "core/SOUL.md")
@@ -351,15 +351,18 @@ class ToolBox:
     @staticmethod
     def execute(action, payload, db=None):
         def path_guard(path):
-            """Sanitize path to prevent absolute path escapes and enforce AGENT_ROOT."""
+            """Sanitize path to strictly enforce isolation within AGENT_ROOT."""
             path = str(path).strip()
-            if path.startswith("/workspace/"): path = path.replace("/workspace/", "workspace/", 1)
-            elif path.startswith(AGENT_ROOT + "/"): path = path.replace(AGENT_ROOT + "/", "", 1)
-            elif path.startswith("/home/"):
-                if AGENT_ROOT in path: path = path.replace(AGENT_ROOT + "/", "", 1)
-                else: path = path.lstrip("/")
-            if ".." in path: path = path.replace("..", ".")
-            return os.path.join(AGENT_ROOT, path.lstrip("/"))
+            # Remove AGENT_ROOT prefix if provided to normalize
+            if path.startswith(AGENT_ROOT):
+                path = path.replace(AGENT_ROOT, "", 1).lstrip("/")
+            # If it's still an absolute path, it's outside AGENT_ROOT, so force it relative
+            if path.startswith("/"):
+                path = path.lstrip("/")
+            # Prevent directory traversal
+            while ".." in path:
+                path = path.replace("..", ".")
+            return os.path.abspath(os.path.join(AGENT_ROOT, path))
 
         # Cache check for high-latency tools
         if action in ["web_search", "fetch_url"] and db:
@@ -612,7 +615,7 @@ class ProjectContext:
 
         source_map += "\nNote: Use 'read_file' to inspect contents. Focus your work inside the active project directory."
         return source_map
-class GeminiClient:
+class AtlasClient:
     def __init__(self, api_key, model="gemini-1.5-pro"):
         self.api_key = api_key
         self.model = model.replace("models/", "")
@@ -643,7 +646,7 @@ class GeminiClient:
 
         contents.append({"role": "user", "parts": parts})
         
-        # Modern Gemini 3.1 Reasoning Configuration
+        # Modern Atlas 3.1 Reasoning Configuration
         gen_config = {"temperature": 0.7, "maxOutputTokens": 8192}
         if self.is_thinking_model:
             # Enable reasoning/thinking if supported by the endpoint
@@ -671,7 +674,7 @@ class GeminiClient:
                     result = json.loads(response.read().decode("utf-8"))
                     candidate = result['candidates'][0]
                     
-                    # Extract Reasoning/Thought if present (Gemini 3.1 style)
+                    # Extract Reasoning/Thought if present (Atlas 3.1 style)
                     thought = ""
                     if 'thought' in candidate:
                         thought = candidate['thought']
@@ -717,9 +720,14 @@ class GeminiClient:
             parts.append({"inlineData": {"mimeType": mime or "audio/mp3", "data": data}})
 
         contents.append({"role": "user", "parts": parts})
+        
+        gen_config = {"temperature": 0.7, "maxOutputTokens": 8192}
+        if self.is_thinking_model:
+            gen_config["thinking_config"] = {"include_thoughts": True}
+
         payload = {
             "contents": contents,
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192}
+            "generationConfig": gen_config
         }
         if system_instruction: payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
@@ -740,7 +748,12 @@ class GeminiClient:
         try:
             chunks = json.loads(raw_data)
             for chunk in chunks:
-                yield chunk['candidates'][0]['content']['parts'][0]['text']
+                candidates = chunk.get('candidates', [])
+                if not candidates: continue
+                content_dict = candidates[0].get('content', {})
+                parts = content_dict.get('parts', [])
+                if not parts: continue
+                yield parts[0].get('text', '')
         except Exception as e:
             yield f"Error parsing stream: {str(e)}"
 
@@ -756,7 +769,7 @@ class GeminiClient:
         except: return None
 class Persistence:
     def __init__(self, api_key):
-        self.client = GeminiClient(api_key)
+        self.client = AtlasClient(api_key)
         self.skills_dir = SKILLS_DIR
         os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
         os.makedirs(self.skills_dir, exist_ok=True)
@@ -803,6 +816,17 @@ class Persistence:
                     results = con.execute("SELECT name, category, description, file_path FROM component_library ORDER BY list_cosine_similarity(embedding, ?::FLOAT[768]) DESC LIMIT ?", [vec, limit]).pl().to_dicts()
             except: pass
         return results
+
+    def get_swarm_stats(self):
+        """Returns high-level stats for status reports."""
+        stats = {"memory_count": 0, "muscle_count": 0, "component_count": 0}
+        try:
+            with duckdb.connect(DB_FILE, read_only=True) as con:
+                stats["memory_count"] = con.execute("SELECT count(*) FROM memory").fetchone()[0]
+                stats["muscle_count"] = con.execute("SELECT count(*) FROM muscle_memory").fetchone()[0]
+                stats["component_count"] = con.execute("SELECT count(*) FROM component_library").fetchone()[0]
+        except: pass
+        return stats
 
     def get_tool_cache(self, action, payload):
         """Retrieves cached tool results if they haven't expired."""
@@ -893,34 +917,56 @@ class Persistence:
         return results + skills_found
 
 class Blackboard:
-    """Global Mission State Synchronization. Allows sub-agents to share context in real-time."""
+    """Global Mission State Synchronization. Uses Redis for 'Hot Memory' and JSONL for persistence."""
     def __init__(self, project_name):
         self.project_name = project_name
         self.state_dir = os.path.join(AGENT_ROOT, "data/mission_state", project_name)
         os.makedirs(self.state_dir, exist_ok=True)
         self.log_file = os.path.join(self.state_dir, "mission_log.jsonl")
+        
+        # Redis 'Hot Memory' Connection
+        self.redis = None
+        try:
+            import redis
+            self.redis = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+            self.redis_key = f"atlas:blackboard:{project_name}"
+        except: pass
 
     def post(self, entry_type, role, msg):
-        """Posts a strategic update to the shared blackboard."""
+        """Posts a strategic update to the shared blackboard (Redis + Disk)."""
         entry = {
             "timestamp": datetime.now().isoformat(),
             "type": entry_type,
             "role": role,
             "msg": msg
         }
+        # Hot Memory (Redis List)
+        if self.redis:
+            try:
+                self.redis.rpush(self.redis_key, json.dumps(entry))
+                self.redis.ltrim(self.redis_key, -50, -1) # Keep last 50 updates in RAM
+            except: pass
+            
+        # Persistence (Disk)
         with open(self.log_file, "a") as f:
             f.write(json.dumps(entry) + "\n")
 
     def get_summary(self):
-        """Generates a compressed mission summary for sub-agent context."""
-        if not os.path.exists(self.log_file): return "No prior mission state."
-        
+        """Generates a compressed mission summary for sub-agent context (Prefer Redis)."""
         updates = []
-        try:
-            with open(self.log_file, "r") as f:
-                for line in f:
-                    updates.append(json.loads(line))
-        except: return "Error reading blackboard."
+        if self.redis:
+            try:
+                raw_updates = self.redis.lrange(self.redis_key, 0, -1)
+                updates = [json.loads(u) for u in raw_updates]
+            except: pass
+            
+        if not updates and os.path.exists(self.log_file):
+            try:
+                with open(self.log_file, "r") as f:
+                    for line in f: updates.append(json.loads(line))
+            except: pass
+            
+        if not updates: return "No prior mission state."
         
         summary = "MISSION_BLACKBOARD (Global State):\n"
         # Only take the last 15 updates to keep it dense
@@ -957,23 +1003,57 @@ class ExecutionGraph:
             return None
         return self.nodes[self.current_node_id]
 
-class GeminiMAS:
+class AtlasSwarm:
     def __init__(self, api_key):
+        print("[*] AtlasSwarm: Initializing...")
         self.api_key = api_key
         self.machine_name = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
+        print(f"[*] AtlasSwarm: Hostname: {self.machine_name}")
         
         # Load local config for overrides
         cfg = read_local_config()
         overrides = cfg.get("model_overrides", {})
 
-        # Default model IDs (Updated for 2026 Performance)
-        self.lite_model = overrides.get("lite", "gemini-2.0-flash")
-        self.pro_model = overrides.get("pro", "gemini-2.0-pro-exp-02-05")
+        # Default model IDs (Updated for March 2026 - Atlas 3.1)
+        self.lite_model = overrides.get("lite", "gemini-3-flash-preview")
+        self.pro_model = overrides.get("pro", "gemini-3.1-pro-preview")
         
-        self.client_lite = GeminiClient(api_key, self.lite_model)
-        self.client_pro = GeminiClient(api_key, self.pro_model)
+        print("[*] AtlasSwarm: Setting up clients...")
+        self.client_lite = AtlasClient(api_key, self.lite_model)
+        self.client_pro = AtlasClient(api_key, self.pro_model)
+        
+        print("[*] AtlasSwarm: Connecting to database...")
         self.db = Persistence(api_key)
+        
+        # Redis 'Hot Memory' for History
+        self.redis = None
+        try:
+            print("[*] AtlasSwarm: Connecting to Redis...")
+            import redis
+            self.redis = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+            self.redis.ping()
+            print("[*] AtlasSwarm: Redis OK.")
+        except Exception as e: 
+            print(f"[*] AtlasSwarm: Redis Failed ({e})")
+            self.redis = None
+
         self.history = []
+        
+        # Prefer Redis for fast history retrieval
+        if self.redis:
+            try:
+                raw_history = self.redis.lrange("atlas:history:global", 0, -1)
+                self.history = [json.loads(h) for h in raw_history]
+            except: pass
+
+        # Fallback/Seed from Disk if Redis empty
+        if not self.history and os.path.exists(CHAT_LOG):
+            print("[*] AtlasSwarm: Loading history from disk...")
+            with open(CHAT_LOG, 'r') as f:
+                for l in f.readlines()[-10:]: 
+                    item = json.loads(l)
+                    self.history.append(item)
+                    if self.redis: self.redis.rpush("atlas:history:global", json.dumps(item))
         
         # Persistent Project Context
         self.current_project = "default"
@@ -981,12 +1061,31 @@ class GeminiMAS:
             try:
                 with open(CURRENT_PROJECT_FILE, 'r') as f: self.current_project = f.read().strip() or "default"
             except: pass
-
-        if os.path.exists(CHAT_LOG):
-            with open(CHAT_LOG, 'r') as f:
-                for l in f.readlines()[-6:]: self.history.append(json.loads(l))
-        
+            
+        print(f"[*] AtlasSwarm: Active Project: {self.current_project}")
         self.blackboard = Blackboard(self.current_project)
+        print("[*] AtlasSwarm: Initialization Complete.")
+
+    def notify_telegram(self, message):
+        """Sends a high-priority notification to the Lead via Telegram."""
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_USER_ID")
+        if not bot_token or not chat_id: return "Telegram credentials missing."
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        
+        header = f"🛰️ [ATLAS @ {self.machine_name.upper()}]"
+        safe_payload = f"{header}\n{'-'*20}\n{str(message)[:3800]}"
+        
+        try:
+            req = urllib.request.Request(url, data=json.dumps({
+                "chat_id": chat_id, 
+                "text": safe_payload,
+                "disable_web_page_preview": True
+            }).encode(), headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=10)
+            return "Notification sent."
+        except Exception as e:
+            return f"Failed to send notification: {e}"
 
     def generate_dashboard(self):
         """Generates a static HTML dashboard for observability during sleep cycles."""
@@ -1002,7 +1101,7 @@ class GeminiMAS:
         <!DOCTYPE html>
         <html>
         <head>
-            <title>GeminiMAS Mission Control</title>
+            <title>AtlasSwarm Mission Control</title>
             <style>
                 body {{ font-family: -apple-system, system-ui, sans-serif; background: #121212; color: #fff; padding: 20px; }}
                 .card {{ background: #1e1e1e; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #333; }}
@@ -1352,6 +1451,21 @@ Output ONLY the markdown text for this persona's system instructions.
 
         with open(scratchpad_path, "w") as f:
             f.write(f"# Project Scratchpad\n\nGoal: {user_goal}\n\n## Acceptance Criteria\n{ac_text}\n")
+
+        # --- STEP 3: SPECULATIVE EXECUTION START ---
+        # While Architect/Security debate, spawn a background speculator to anticipate setup needs
+        def speculative_worker(goal, ac, project):
+            spec_prompt = f"Goal: {goal}\nAC: {ac}\nAnticipate the immediate setup tasks (scaffolding, mkdir, npm init). Provide a single shell command to execute them. If unsure, say 'WAIT'."
+            cmd = self.client_lite.generate(spec_prompt, system_instruction="You are the Atlas Speculator. Prepare the environment in the background.")
+            if "WAIT" not in cmd.upper() and ("mkdir" in cmd or "npm" in cmd):
+                self.blackboard.post("SPECULATE", "Speculator", f"Anticipated setup: {cmd[:100]}...")
+                ToolBox.execute("run_shell", f"cd workspace/{project} && {cmd}", db=self.db)
+                self.blackboard.post("COMPLETE", "Speculator", "Speculative setup complete.")
+
+        spec_thread = threading.Thread(target=speculative_worker, args=(user_goal, ac_text, self.current_project))
+        spec_thread.start()
+        # --- SPECULATIVE EXECUTION END ---
+
         # 1.5 Debate Phase (Pre-execution Planning)
         divider("ARCHITECTURE DEBATE")
         yield {"type": "status", "tag": "ARCHITECT", "msg": "Proposing initial system architecture..."}
@@ -1435,7 +1549,13 @@ Output ONLY the markdown text for this persona's system instructions.
                 q.put(("RESULT", step['id'], f"CRASH ERROR: {str(e)}", False))
 
         divider("ADAPTIVE EXECUTION")
+        self.status = "RUNNING"
         while graph.status == "PENDING":
+            if self.status == "ABORTED":
+                yield {"type": "status", "tag": "ABORT", "msg": "MISSION ABORTED BY OPERATOR."}
+                status("ABORT", "MISSION ABORTED BY OPERATOR.", C_RED)
+                return "Mission Terminated."
+
             current_task = graph.get_next_task()
             if not current_task: break
 
@@ -1487,20 +1607,29 @@ Output ONLY the markdown text for this persona's system instructions.
                 entry_user = {"role": "user", "text": user_input}
                 entry_model = {"role": "model", "text": full_resp}
                 self.history.extend([entry_user, entry_model])
+                
+                # Update Hot Memory (Redis)
+                if self.redis:
+                    try:
+                        self.redis.rpush("atlas:history:global", json.dumps(entry_user), json.dumps(entry_model))
+                        self.redis.ltrim("atlas:history:global", -10, -1) # Keep last 10 turns in RAM
+                    except: pass
+
                 os.makedirs(os.path.dirname(CHAT_LOG), exist_ok=True)
                 with open(CHAT_LOG, 'a') as f:
                     f.write(json.dumps(entry_user) + "\n" + json.dumps(entry_model) + "\n")
                 yield {"type": "final_answer", "msg": full_resp}
 
 def heartbeat_daemon(api_key):
-    mas = GeminiMAS(api_key)
+    mas = AtlasSwarm(api_key)
     print(f"\n[!] Heartbeat Daemon Started v{__version__} (Evolution Mode + Distributed Listener)")
     os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
 
-    repo_path = os.path.expanduser('~/GeminiMAS_Repo')
+    repo_path = os.path.expanduser('~/AtlasSwarm_Repo')
     mailbox_path = os.path.join(repo_path, 'mailbox')
     last_research_file = os.path.join(AGENT_ROOT, "core/last_research.txt")
     last_consolidation = 0
+    last_tg_pulse = 0
     
     # Optional Redis Integration for True Distributed Swarm
     redis_client = None
@@ -1571,6 +1700,27 @@ def heartbeat_daemon(api_key):
             # Sync with Repo
             subprocess.run(f"cd {repo_path} && git pull origin main", shell=True, capture_output=True)
 
+            # 4. Periodic Telegram Status Update (every 2 hours)
+            if (now - last_tg_pulse) > 7200:
+                stats = mas.db.get_swarm_stats()
+                blackboard_summary = mas.blackboard.get_summary()
+                pulse_msg = f"""
+MISSION COMMANDER STATUS UPDATE
+-------------------------------
+Active Project: {mas.current_project.upper()}
+Swarm Stats:
+- Memories: {stats['memory_count']}
+- Muscle: {stats['muscle_count']}
+- Vault Components: {stats['component_count']}
+
+Latest Mission Blackboard:
+{blackboard_summary[:500]}...
+
+System Status: ONLINE / EVOLVING
+"""
+                mas.notify_telegram(pulse_msg)
+                last_tg_pulse = now
+
             # 3. Idle Memory Consolidation (once every 30 mins)
             if (now - last_consolidation) > 1800:
                 mas.consolidate_memory()
@@ -1586,21 +1736,38 @@ def heartbeat_daemon(api_key):
                 except: pass
             
             if (now - last_research) > evolution_interval:
-                print(f"\n[Pulse] Starting Autonomous Research Swarm (Cycle {evo_count+1}, Interval: {current_interval_hrs}h)...")
+                print(f"\n[Pulse] Starting Elite Evolution Swarm (Cycle {evo_count+1})...")
+                
+                # Analyze internal performance logs to guide research
+                perf_logs = read_file_safe(os.path.join(AGENT_ROOT, "logs/performance_optimizations.md"))
+                
                 research_goal = f"""
-                INITIATING ATLAS RESEARCH PROTOCOL:
-                1. DIVERGENT RESEARCH: Use web_search and fetch_url to investigate bleeding-edge patterns in:
-                   - LLM multi-agent swarm architectures.
-                   - Next.js 15, React 19, and Tailwind CSS v4 best practices.
-                   - Modern UI/UX component design patterns (e.g., specific Dashboard layouts, SaaS landing page sections).
-                2. KNOWLEDGE SYNTHESIS: Write a concise, dense markdown summary of findings to {KNOWLEDGE_DIR}.
-                3. VAULT EXPANSION: Identify at least one high-value modular component pattern discovered. Use the 'save_to_vault' tool to create a high-quality, reusable boilerplate version of this component in our library.
-                4. CONVERGENT EVOLUTION: Analyze 'bin/gemini_mas.py' against these findings. Propose a concrete structural or logic improvement to make the swarm faster, smarter, or more token-efficient.
+                INITIATING ATLAS ELITE EVOLUTION PROTOCOL:
+                
+                1. PERFORMANCE AUDIT: Analyze these recent performance logs:
+                   {perf_logs[-5000:] if perf_logs else "No logs yet. Focus on general efficiency."}
+                   Identify the top bottleneck (latency or logic failure).
+                
+                2. TARGETED RESEARCH: Use web_search to find a technical solution for that bottleneck.
+                   Also investigate one new 'Skill' pattern for the NextStep Component Vault.
+                
+                3. VAULT EXPANSION: Save the discovered component to the vault.
+                
+                4. EXPERIMENTAL SELF-PATCH:
+                   - Create a new git branch named 'evolution/cycle-{evo_count+1}'.
+                   - Implement a concrete logic improvement to 'bin/atlas_core.py' based on your findings.
+                   - Use the 'verify_project' tool to ensure the core engine still compiles.
+                   - If successful, push the branch and use 'notify_telegram' to request a merge.
                 """
+                
+                # Execute the evolution mission
                 for _ in mas.process(research_goal, stream=True): pass
+                
+                # Sync new knowledge/skills to the global repo immediately
+                subprocess.run(f"cd {repo_path} && git add knowledge/ skills/ library/ && git commit -m 'evolution: swarm knowledge update (Cycle {evo_count+1})' && git push origin main", shell=True)
+                
                 with open(last_research_file, 'w') as f: f.write(str(now))
                 
-                # Update evolution count for tapering
                 cfg["evolution_count"] = evo_count + 1
                 write_local_config(cfg)
 
@@ -1650,7 +1817,7 @@ def heartbeat_daemon(api_key):
             time.sleep(60)
 
 def interactive_loop(api_key):
-    mas = GeminiMAS(api_key)
+    mas = AtlasSwarm(api_key)
     cfg = read_local_config()
     hw = cfg.get("_current_probe", {})
     
@@ -1792,7 +1959,7 @@ def interactive_loop(api_key):
         except Exception as e:
             status("SHELL_ERR", str(e), C_RED)
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='GeminiMAS Core Engine')
+    parser = argparse.ArgumentParser(description='AtlasSwarm Core Engine')
     subparsers = parser.add_subparsers(dest='command')
     subparsers.add_parser('heartbeat')
     parser.add_argument('positional_prompt', nargs='?', type=str)
@@ -1811,7 +1978,7 @@ if __name__ == "__main__":
         prompt = args.prompt or args.positional_prompt
         images = [args.image] if args.image else None
         if prompt:
-            mas = GeminiMAS(key)
+            mas = AtlasSwarm(key)
             for update in mas.process(prompt, stream=True, images=images):
                 if isinstance(update, dict):
                     if update['type'] == 'chunk':

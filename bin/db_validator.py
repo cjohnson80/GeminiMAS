@@ -1,7 +1,7 @@
 import duckdb
 import os
 
-DB_PATH = '/home/chrisj/gemini_agents/data/mas_core.db'
+DB_PATH = '/home/chrisj/atlas_agents/data/mas_core.db'
 
 def validate_db_config():
     # Enforce read_only for IO efficiency on Celeron hardware

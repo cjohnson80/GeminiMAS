@@ -1,5 +1,5 @@
 # Active Goals
-- [x] **CORE_ARCHITECTURE_AUDIT:** Use your new Gemini 3.1 capabilities to audit your entire bin/ directory. 
+- [x] **CORE_ARCHITECTURE_AUDIT:** Use your new Atlas 3.1 capabilities to audit your entire bin/ directory. 
       1. Analyze for redundant logic across files.
       2. Optimize the "Hierarchy of Truth" prompt injection for token efficiency.
       3. Propose a new 'JIT' tool that would have helped in the last 5 tasks.

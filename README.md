@@ -17,7 +17,7 @@ ATLAS (Autonomous Technical Lead & Architect Swarm) is a high-density, self-impr
    ```bash
    chmod +x install.sh && ./install.sh
    ```
-3. Configure your environment in `~/gemini_agents/.env`:
+3. Configure your environment in `~/atlas_agents/.env`:
    ```env
    GEMINI_API_KEY="your_google_ai_studio_key"
    TELEGRAM_BOT_TOKEN="your_bot_token"
@@ -32,5 +32,5 @@ ATLAS (Autonomous Technical Lead & Architect Swarm) is a high-density, self-impr
 - **Evolution:** Managed automatically by the `atlas` heartbeat daemon.
 
 ## 🧠 Memory & Skills
-- **Skills:** Add custom Markdown guides to `~/gemini_agents/skills/` to expand agent capabilities permanently.
-- **Memory:** All interactions are semantically indexed and stored in `~/gemini_agents/memory/memory.db`.
+- **Skills:** Add custom Markdown guides to `~/atlas_agents/skills/` to expand agent capabilities permanently.
+- **Memory:** All interactions are semantically indexed and stored in `~/atlas_agents/memory/memory.db`.
