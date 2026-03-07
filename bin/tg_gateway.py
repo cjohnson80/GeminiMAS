@@ -1,4 +1,10 @@
 import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import asyncio
 import subprocess
 import logging
@@ -7,6 +13,7 @@ import json
 import time
 import psutil
 import gc
+import signal
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 
@@ -23,11 +30,14 @@ async def celeron_watchdog(threshold_mb=150, check_interval_sec=30):
         try:
             rss_mb = process.memory_info().rss / (1024 * 1024)
             if rss_mb > threshold_mb:
-                logger.warning(f'[WATCHDOG] High Memory: {rss_mb:.2f}MB. Forcing GC.')
+                logger.warning(f"[WATCHDOG] High Memory: {rss_mb:.2f}MB. Forcing GC.")
                 gc.collect()
             await asyncio.sleep(check_interval_sec)
         except asyncio.CancelledError:
             break
+        except Exception as e:
+            logger.error(f"[WATCHDOG] Exception: {e}")
+            await asyncio.sleep(5)
 
 # Distributed Config
 REPO_PATH = os.path.expanduser('~/GeminiMAS_Repo')
@@ -143,6 +153,7 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await proc.communicate()
     await update.message.reply_text(f"Successfully merged evolution: {branch_name}. System updated.")
 
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update): return
     if not update.message or not update.message.text: return
@@ -170,39 +181,73 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with open(CURRENT_PROJECT_FILE, 'r') as f: curr_p = f.read().strip()
             
         # Process locally with activity feedback
-        status_msg = await update.message.reply_text(f"[{MY_HOSTNAME}] 🧠 Swarm Working on '{curr_p.upper()}'...")
+        status_msg = await update.message.reply_text(f"[ATLAS @ {MY_HOSTNAME}] 🧠 Working on '{curr_p.upper()}'...")
         
         async with semaphore:
             # Start background "typing" status
             typing_task = asyncio.create_task(context.bot.send_chat_action(chat_id=update.effective_message.chat_id, action="typing"))
             
             try:
-                cmd_executable = "gagent" if subprocess.run(["which", "gagent"], capture_output=True).returncode == 0 else sys.executable
-                
-                if cmd_executable == "gagent":
+                cmd_executable = "atlas" if subprocess.run(["which", "atlas"], capture_output=True).returncode == 0 else sys.executable
+                mas_path = os.path.expanduser('~/gemini_agents/bin/gemini_mas.py')
+                venv_python = os.path.expanduser('~/gemini_agents/venv/bin/python3')
+                python_cmd = venv_python if os.path.exists(venv_python) else sys.executable
+
+                if cmd_executable == "atlas":
                     proc = await asyncio.create_subprocess_exec(cmd_executable, "--prompt", text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 else:
-                    mas_path = os.path.expanduser('~/gemini_agents/bin/gemini_mas.py')
-                    proc = await asyncio.create_subprocess_exec(sys.executable, mas_path, '--prompt', text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    proc = await asyncio.create_subprocess_exec(python_cmd, mas_path, '--prompt', text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
-                # Keep sending "typing" while proc runs
-                while proc.returncode is None:
-                    await context.bot.send_chat_action(chat_id=update.effective_message.chat_id, action="typing")
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=4.0)
-                    except asyncio.TimeoutError:
-                        continue
+                full_output = []
+                last_update_time = time.time()
+                
+                import re
+                ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
-                stdout, stderr = await proc.communicate()
-                
-                # Robust decoding and truncation
-                out_str = stdout.decode('utf-8', errors='replace').strip()
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    
+                    line_text = line.decode('utf-8', errors='replace').strip()
+                    clean_line = ansi_escape.sub('', line_text)
+                    full_output.append(clean_line)
+                    
+                    # Update Telegram every 3 seconds if there's new important info
+                    if time.time() - last_update_time > 3.0:
+                        # Extract the last "thought" or status
+                        display_text = f"[ATLAS @ {MY_HOSTNAME}] 🧠 Working...\n"
+                        # Look for the last thinking step
+                        thought = next((l for l in reversed(full_output) if "THINKING" in l), None)
+                        if thought:
+                            thought_msg = thought.split("]", 1)[-1].strip()
+                            display_text += f"\n💭 *Thought:* {thought_msg}"
+                        
+                        # Look for current execution step
+                        exec_step = next((l for l in reversed(full_output) if "Executing" in l), None)
+                        if exec_step:
+                            exec_msg = exec_step.split("]", 1)[-1].strip()
+                            display_text += f"\n⚙️ *Action:* {exec_msg}"
+                        
+                        try:
+                            await status_msg.edit_text(display_text[:4096], parse_mode='Markdown')
+                            last_update_time = time.time()
+                        except:
+                            pass # Ignore "message is not modified" errors
+
+                _, stderr = await proc.communicate()
                 err_str = stderr.decode('utf-8', errors='replace').strip()
                 
-                response = out_str or f"Error: {err_str}"
-                if not response: response = "Core engine returned empty response."
+                final_response = "\n".join(full_output) or f"Error: {err_str}"
+                if not final_response: final_response = "Core engine returned empty response."
                 
-                await status_msg.edit_text(response[:4096])
+                # Try to extract the ACTUAL answer from the full output
+                # Usually it's everything after the last "Executing final_answer..." or similar
+                # Or just send the whole thing if it's not too long
+                if len(final_response) > 4000:
+                    final_response = final_response[-4000:]
+                
+                await status_msg.edit_text(final_response)
             except Exception as e:
                 import traceback
                 logger.error(f"Error handling message: {e}\n{traceback.format_exc()}")
@@ -249,6 +294,69 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if status_msg:
                 await status_msg.edit_text(f"Error: {str(e)}")
 
+
+async def sh_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update): return
+    
+    command = " ".join(context.args)
+    if not command:
+        await update.message.reply_text("Usage: /sh <command>")
+        return
+        
+    target_machine = get_focus()
+    
+    if target_machine == MY_HOSTNAME.lower() or target_machine == MY_HOSTNAME:
+        status_msg = await update.message.reply_text(f"[{MY_HOSTNAME}] Executing...")
+        
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid
+            )
+            
+            MAX_EXEC_TIME = 60.0
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=MAX_EXEC_TIME)
+            except asyncio.TimeoutError:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                await asyncio.sleep(1)
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await status_msg.edit_text(f"[{MY_HOSTNAME}] Execution timed out after {MAX_EXEC_TIME}s.")
+                return
+
+            out_str = stdout.decode('utf-8', errors='replace').strip()
+            err_str = stderr.decode('utf-8', errors='replace').strip()
+            
+            output = ""
+            if out_str:
+                output += f"STDOUT:\n{out_str}\n"
+            if err_str:
+                output += f"STDERR:\n{err_str}\n"
+                
+            if not output:
+                output = "Command executed silently (no output)."
+                
+            if len(output) > 4000:
+                output = output[:4000] + "\n...[TRUNCATED]"
+                
+            # Escape for MarkdownV2
+            escaped_hostname = MY_HOSTNAME.replace('-', r'\-').replace('_', r'\_')
+            output = output.replace('`', "'") # Prevent breaking code blocks
+            
+            await status_msg.edit_text(rf"\[{escaped_hostname}\]" + f"\n```text\n{output}\n```", parse_mode='MarkdownV2')
+            
+        except Exception as e:
+            logger.error(f"Error executing /sh: {e}")
+            await status_msg.edit_text(f"[{MY_HOSTNAME}] Error: {str(e)}")
+            
+    else:
+        await route_to_machine(target_machine, f"/sh {command}", update)
+
 async def main():
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not token:
@@ -269,6 +377,7 @@ async def main():
     app.add_handler(CommandHandler("approve", approve_command))
     app.add_handler(CommandHandler("project", project_command))
     app.add_handler(CommandHandler("projects", list_projects))
+    app.add_handler(CommandHandler("sh", sh_command))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 

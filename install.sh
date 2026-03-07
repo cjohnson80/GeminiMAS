@@ -154,8 +154,8 @@ if [ -d "$REPO_ROOT/skills" ]; then
 fi
 
 # --- 8. Global Wrapper ---
-echo "[*] Creating global gagent wrapper..."
-cat << 'EOF' > "$HOME/.local/bin/gagent"
+echo "[*] Creating global atlas wrapper..."
+cat << 'EOF' > "$HOME/.local/bin/atlas"
 #!/bin/bash
 export AGENT_ROOT="$HOME/gemini_agents"
 if [ -f "$AGENT_ROOT/.env" ]; then
@@ -169,7 +169,7 @@ if [ -f "$AGENT_ROOT/.env" ]; then
 fi
 "$AGENT_ROOT/venv/bin/python3" "$AGENT_ROOT/bin/gemini_mas.py" "$@"
 EOF
-chmod +x "$HOME/.local/bin/gagent"
+chmod +x "$HOME/.local/bin/atlas"
 
 # --- 7. PATH Setup ---
 SHELL_RC=""
@@ -196,7 +196,7 @@ mkdir -p "$SERVICE_DIR"
 
 # Telegram Bot Service
 echo "[*] Creating Telegram Bot service..."
-cat << EOF > "$SERVICE_DIR/gagent-bot.service"
+cat << EOF > "$SERVICE_DIR/atlas-bot.service"
 [Unit]
 Description=GeminiMAS Telegram Bot v4.7
 After=network.target
@@ -213,7 +213,7 @@ EOF
 
 # Heartbeat Evolution Daemon
 echo "[*] Creating Heartbeat service..."
-cat << EOF > "$SERVICE_DIR/gagent-heartbeat.service"
+cat << EOF > "$SERVICE_DIR/atlas-heartbeat.service"
 [Unit]
 Description=GeminiMAS Evolution Heartbeat
 After=network.target
@@ -229,12 +229,12 @@ WantedBy=default.target
 EOF
 
 smart_run "systemctl --user daemon-reload" "Reloading systemd"
-smart_run "systemctl --user enable gagent-bot.service gagent-heartbeat.service" "Enabling services"
+smart_run "systemctl --user enable atlas-bot.service atlas-heartbeat.service" "Enabling services"
 # Don't restart if .env hasn't been configured yet
 if grep -q "your_gemini_api_key_here" "$AGENT_ROOT/.env"; then
     echo "[!] Services enabled but not started because .env is not configured."
 else
-    smart_run "systemctl --user restart gagent-bot.service gagent-heartbeat.service" "Restarting services"
+    smart_run "systemctl --user restart atlas-bot.service atlas-heartbeat.service" "Restarting services"
 fi
 
 echo "==============================================="
@@ -242,5 +242,5 @@ echo "[*] GeminiMAS v8.2 Installed Successfully."
 echo "[*] Binary location: $AGENT_ROOT/bin"
 echo "[*] Venv location: $AGENT_ROOT/venv"
 echo "[*] Config location: $AGENT_ROOT/.env"
-echo "[*] Wrapper location: $HOME/.local/bin/gagent"
+echo "[*] Wrapper location: $HOME/.local/bin/atlas"
 echo "==============================================="
